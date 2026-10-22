@@ -12,7 +12,7 @@ public class ConnectionManager {
     private DatabaseContext context;
 
     public void connect(List<Argument> arguments) {
-
+        close();
         String driver = "mock";
         String host = null;
         int port = 5432;

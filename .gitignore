@@ -37,3 +37,17 @@ build/
 
 ### Mac OS ###
 .DS_Store
+
+# Java / Maven
+**/target/
+*.class
+
+# IntelliJ IDEA
+.idea/
+**/.idea/
+*.iml
+
+# Local secrets
+.env
+.env.*
+!.env.example

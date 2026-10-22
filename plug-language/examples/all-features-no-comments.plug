@@ -1,0 +1,53 @@
+plug.connect(driver: "mock", host: "localhost", port: 5432, database: "mydb", username: "victor", password: "secret");
+
+plug.use("users");
+
+plug.get(name)
+    .where((country, EQ, "Kenya") or ((country, EQ, "Nigeria")));
+
+plug.get(name, age)
+    .where(NOT ((country, EQ, "Kenya")) AND ((age, GT, 20)));
+
+plug.get(name)
+    .where(((age, GTE, 25)) OR ((country, EQ, "Ghana") and (role, EQ, "student")));
+
+plug.get(name, role)
+    .where((country, EQ, "Ghana"))
+    .and(active, EQ, true)
+    .or(role, EQ, "developer");
+
+plug.get(name).where((email, EQ, null));
+
+plug.get(name).where((country, NE, "Ghana"));
+
+plug.get(name).where((country, IN, ["Kenya", "Nigeria"]));
+
+plug.get(name).where((name, CONTAINS, "li"));
+
+plug.get(name).where((age, GT, 18));
+plug.get(name).where((balance, LT, -1));
+
+plug.get(name, balance)
+    .where((country, EQ, "Ghana"))
+    .sort(balance, DESC)
+    .limit(3);
+
+plug.insert(name: "Kwame", age: 22, email: "kwame@gmail.com", balance: 500, active: true, country: "Ghana", role: "student");
+plug.get(id).where((name, EQ, "Kwame"));
+
+plug.insert(id: 100, name: "Quote \" inside", email: "tab\there@plug.dev");
+
+plug.insert(id: 101, name: "NoEmail", email: null);
+
+plug.update(balance: 777, role: "designer").where((id, EQ, 21));
+plug.get(name, balance, role).where((id, EQ, 21));
+
+plug.get(name).where((name, EQ, "Quote \" inside"));
+plug.update(active: false).where((id, EQ, 100));
+
+plug.delete().where((id, IN, [100, 101]));
+plug.get(name).where((id, IN, [100, 101]));
+
+plug.delete().where((name, EQ, "Kwame"));
+
+plug.close();

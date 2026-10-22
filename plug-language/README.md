@@ -148,23 +148,134 @@ Direction is `ASC` or `DESC`. The field must be sortable in the schema.
 .limit(5)
 ```
 
-Whole numbers only; a decimal literal is rejected.
+Whole numbers only; a decimal literal is rejected. `.sort` and `.limit`
+are read features and only valid after `plug.get(...)`.
+
+### Write operations
+
+The write statements use the same grammar and run through the same
+adapter `execute(plan)` contract as reads. Payloads are named
+field/value pairs — string, number, boolean, or `null` values only.
+
+#### plug.insert(...) — add one record
+
+```plug
+plug.insert(name: "Kwame", age: 22, country: "Ghana", role: "student", balance: 500, active: true, email: "kwame@gmail.com");
+
+Records inserted: 1
+```
+
+- An omitted `id` is auto-assigned above the current maximum; an
+  explicit `id:` must not already exist (`Duplicate id: 1` otherwise).
+- Unknown fields and type mismatches are rejected exactly like they
+  are in `where()`.
+- `insert()` cannot be chained with `.where()`/.and()/.or().
+
+#### plug.update(...) — modify matching records
+
+The payload names the fields to change; a `.where(...)` clause in the
+same chain scopes the effect:
+
+```plug
+plug.update(balance: 1).where((id, LTE, 2));
+
+Records updated: 2
+```
+
+`.where()`/`.and()`/`.or()` all work the same as in reads.
+
+#### plug.delete() — remove matching records
+
+Takes no arguments; a `.where(...)` clause in the same chain scopes
+the effect:
+
+```plug
+plug.delete().where((country, EQ, "Kenya"));
+
+Records deleted: 4
+```
+
+`update()` and `delete()` **require** at least one `where()` condition,
+so a typo can never rewrite or wipe a whole collection. Count lines
+reflect how many records the operation affected, and later statements
+in the same program see the change.
+
+### Aggregates
+
+Terminal chained calls that fold the filtered records into one value
+instead of returning rows. The query's conditions scope them:
+
+```plug
+plug.get(name).count();
+
+COUNT = 20
+
+plug.get().where((country, EQ, "Ghana")).count();
+
+COUNT = 11
+
+plug.get().sum(balance);
+
+SUM(balance) = 590700
+
+plug.get().avg(balance);
+
+AVG(balance) = 29535.0
+
+plug.get().min(age);
+
+MIN(age) = 17
+
+plug.get().max(balance);
+
+MAX(balance) = 91000
+```
+
+Rules:
+
+- `count()` takes no arguments. `sum(field)`, `avg(field)`, `min(field)`,
+  and `max(field)` take one bare field name.
+- `get()` may be argument-free in an aggregate statement — projecting
+  fields has no effect on aggregates.
+- An aggregate must be the **last** call in its chain, and cannot be
+  combined with `.sort()`/`.limit()` or a write statement.
+- `sum`/`avg` require a numeric field; `min`/`max` work on any comparable
+  field (strings compare lexicographically).
+- Null values are skipped. An empty match set is `COUNT = 0` but
+  `null` for every other aggregate (SQL semantics).
+- Unknown fields, non-numeric `sum`/`avg`, and non-comparable fields are
+  rejected with the same schema validation as reads.
 
 ### Operators
 
-| Operator  | Meaning                              |
-|-----------|--------------------------------------|
-| `EQ`      | equality (matches `null` too)        |
-| `NE`      | inequality                           |
-| `GT` `GTE` `LT` `LTE` | numeric comparison       |
-| `IN`      | membership in a list                 |
-| `CONTAINS`| substring match on two strings       |
+| Operator              | Meaning                              |
+|-----------------------|--------------------------------------|
+| `EQ`                  | equality (matches `null` too)        |
+| `NE`                  | inequality                           |
+| `GT` `GTE` `LT` `LTE` | numeric comparison                   |
+| `IN`                  | membership in a list                 |
+| `CONTAINS`            | substring match on two strings       |
+| `BETWEEN`             | inclusive range `[low, high]`; works on numbers and comparable strings |
+| `LIKE`                | pattern match: `%` = any run of characters, `_` = exactly one character; the whole string must match and matching is case-sensitive |
+| `IS NULL`             | true when the field holds `null` (takes no value)                     |
+| `IS NOT NULL`         | inverse of `IS NULL`                                                  | 
 
 ```plug
 .where((country, IN, ["Kenya", "Nigeria"]))
 .where((email, EQ, null))
-.where((name, CONTAINS, "li"));
+.where((name, CONTAINS, "li"))
+.where((age, BETWEEN, [18, 25]))
+.where((name, LIKE, "%@outlook.com"))
+.where((email, IS NULL))
+.where((email, IS NOT NULL));
 ```
+
+`IS NULL` has two spellings — the keyword form `(email, IS NULL)`, the
+negated keyword form `(email, IS NOT NULL)`, and the tuple form
+`(email, IS, null)` — which also works in the flat chained form:
+`.and(email, IS, null)`. Keyword forms normalize case-insensitively
+(`is null`, `is not null`). Null fields never match `LIKE` (they are
+simply skipped, SQL-style).
 
 ### Values
 
@@ -181,20 +292,23 @@ Whole numbers only; a decimal literal is rejected.
 // also a comment to end of line
 ```
 
-## Errors
-
 All failures surface as `PlugException`:
 
 - Lex and parse errors carry line numbers (`line 3: Expected a value.`).
 - Unknown fields, operators, or collections are runtime errors.
-- Condition values are validated against the collection schema on both
-  where-paths — a string compared to an integer field fails type checking.
+- Condition values and insert/update payloads are validated against the
+  collection schema — a string compared to (or written into) an integer
+  field fails type checking.
 
 ## Architecture
 
     .plug file → Lexer (+ line numbers) → Parser → AST
                → Runtime → Query → QueryPlanner → ExecutionPlan
                → ExecutionEngine → DatabaseAdapter → QueryResult
+
+- `ExecutionPlan` is a single unit of work: a `READ`, `INSERT`,
+  `UPDATE`, or `DELETE` operation over a collection, with the query
+  conditions and (for writes) the field/value data.
 
 - `DatabaseAdapter` is the backend contract: `connect`, `execute(plan) →
   QueryResult`, `close`. Adapters return structured results and never print.
@@ -204,9 +318,10 @@ All failures surface as `PlugException`:
 
 ## Roadmap
 
-1. Complete the prototype language: insert/update/delete, aggregates
-   (count/sum/avg/min/max), joins, and more operators (BETWEEN, LIKE,
-   IS NULL).
+1. Complete the prototype language: joins. Aggregates
+   (count/sum/avg/min/max), insert/update/delete, and the operator set
+   (EQ, NE, GT, GTE, LT, LTE, IN, CONTAINS, BETWEEN, LIKE, IS NULL/
+   IS NOT NULL) are done.
 2. Real adapters, in order: PostgreSQL, MongoDB.
 3. PlugDB — a custom database using Plug as its query language.
 4. Adapters for more database categories.

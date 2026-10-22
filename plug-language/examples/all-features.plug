@@ -1,0 +1,112 @@
+# Full feature walkthrough for Plug (as of the write-features milestone).
+# Run with: java -cp target/classes dev.victor.plug.Main examples/all-features.plug
+# Everything here is a happy path: a section that still prints correct
+# counts after a language change is a regression in defense-in-depth.
+
+# ---------------------------------------------------------------- connect
+plug.connect(driver: "mock", host: "localhost", port: 5432, database: "mydb", username: "victor", password: "secret");
+
+plug.use("users");
+
+# ------------------------------------------------------------ reads: expression where
+# 1) Grouping with OR, and a lowercase `or` keyword mixed in:
+plug.get(name)
+    .where((country, EQ, "Kenya") or ((country, EQ, "Nigeria")));
+
+# 2) NOT plus grouping, uppercase keywords:
+plug.get(name, age)
+    .where(NOT ((country, EQ, "Kenya")) AND ((age, GT, 20)));
+
+# 3) Nested logic on both sides:
+plug.get(name)
+    .where(((age, GTE, 25)) OR ((country, EQ, "Ghana") and (role, EQ, "student")));
+
+# --------------------------------------------------------- reads: flat chained where
+# Strict left-to-right semantics: (Ghana AND active) OR developer
+plug.get(name, role)
+    .where((country, EQ, "Ghana"))
+    .and(active, EQ, true)
+    .or(role, EQ, "developer");
+
+# ------------------------------------------------------------ reads: every operator
+# EQ with null:
+plug.get(name).where((email, EQ, null));
+
+# NE:
+plug.get(name).where((country, NE, "Ghana"));
+
+# IN with a list:
+plug.get(name).where((country, IN, ["Kenya", "Nigeria"]));
+
+# CONTAINS on two strings:
+plug.get(name).where((name, CONTAINS, "li"));
+
+# Numeric family: GT, and LT with a negative literal (matches nothing, on purpose)
+plug.get(name).where((age, GT, 18));
+plug.get(name).where((balance, LT, -1));
+
+# BETWEEN is inclusive on both ends, numeric or string bounds:
+plug.get(name).where((age, BETWEEN, [18, 20]));
+plug.get(name).where((name, BETWEEN, ["Brian", "Chris"]));
+
+# LIKE: % = any run, _ = one character, whole-string, case-sensitive;
+# null fields are skipped rather than errors:
+plug.get(name).where((name, LIKE, "_ictor"));
+plug.get(name).where((email, LIKE, "%@outlook.com"));
+
+# IS NULL / IS NOT NULL, keyword and tuple spellings:
+plug.get(name).where((email, IS NULL));
+plug.get(name).where((email, IS NOT NULL));
+plug.get(name).where((email, IS, null));
+plug.get(name).where((email, IS NULL) OR (age, GT, 30));
+
+# --------------------------------------------------------------- reads: sort + limit
+plug.get(name, balance)
+    .where((country, EQ, "Ghana"))
+    .sort(balance, DESC)
+    .limit(3);
+
+# --------------------------------------------------------------- reads: aggregates
+# count over everything, and scoped by a where:
+plug.get(name).count();
+plug.get().where((country, EQ, "Ghana")).count();
+
+# sum/avg are numeric-only; min/max work on strings too:
+plug.get().sum(balance);
+plug.get().avg(balance);
+plug.get().min(age);
+plug.get().max(balance);
+plug.get().min(name);
+
+# An empty match set: count is 0, the rest are null (SQL semantics):
+plug.get().where((balance, LT, -1)).count();
+plug.get().where((balance, LT, -1)).sum(balance);
+
+# ---------------------------------------------------------------------- write: insert
+# No id given -> auto-assigned above the current maximum (21):
+plug.insert(name: "Kwame", age: 22, email: "kwame@gmail.com", balance: 500, active: true, country: "Ghana", role: "student");
+plug.get(id).where((name, EQ, "Kwame"));
+
+# Escapes (\" and \t inside a string) and an explicit id:
+plug.insert(id: 100, name: "Quote \" inside", email: "tab\there@plug.dev");
+
+# A field set to null is fine:
+plug.insert(id: 101, name: "NoEmail", email: null);
+
+# ---------------------------------------------------------------------- write: update
+plug.update(balance: 777, role: "designer").where((id, EQ, 21));
+plug.get(name, balance, role).where((id, EQ, 21));
+
+# Same escaping round-trip through where: the record above has an
+# embedded quote, so EQ with the escaped literal must still match it.
+plug.get(name).where((name, EQ, "Quote \" inside"));
+plug.update(active: false).where((id, EQ, 100));
+
+# ---------------------------------------------------------------------- write: delete
+plug.delete().where((id, IN, [100, 101]));
+plug.get(name).where((id, IN, [100, 101]));
+
+# Clean up the record inserted this run so remaining data stays intact:
+plug.delete().where((name, EQ, "Kwame"));
+
+plug.close();

@@ -455,6 +455,104 @@ public class Parser {
                         "Expected operator."
                 );
 
+        /*
+         * IS takes three spellings:
+         *
+         * (email, IS NULL)        IS followed by the NULL keyword
+         * (email, IS NOT NULL)    the negated two-keyword form
+         * (email, IS, null)       the tuple form with a null value
+         *
+         * All normalize to the same comparison. Any other value
+         * after IS is rejected here, at parse time.
+         */
+        if (operator.equalsIgnoreCase("IS")) {
+
+            if (check(TokenType.IDENTIFIER)
+                    && peek().getValue().equalsIgnoreCase("NULL")) {
+
+                advance();
+
+                consume(
+                        TokenType.RPAREN,
+                        "Expected ')' after condition."
+                );
+
+                return new ComparisonExpression(
+                        field,
+                        "IS NULL",
+                        new Value(Value.Type.NULL, null)
+                );
+            }
+
+            /*
+             * NOT lexes as a keyword token when written
+             * uppercase, and as an identifier when written
+             * lowercase — accept both forms here.
+             */
+            boolean isNotKeyword =
+                    check(TokenType.NOT)
+                            || (check(TokenType.IDENTIFIER)
+                            && peek().getValue().equalsIgnoreCase("NOT"));
+
+            if (isNotKeyword) {
+
+                advance();
+
+                if (!check(TokenType.IDENTIFIER)
+                        || !peek().getValue().equalsIgnoreCase("NULL")) {
+
+                    throw new PlugException(
+                            "Expected NULL after IS NOT.",
+                            peek().getLine()
+                    );
+                }
+
+                advance();
+
+                consume(
+                        TokenType.RPAREN,
+                        "Expected ')' after condition."
+                );
+
+                return new ComparisonExpression(
+                        field,
+                        "IS NOT NULL",
+                        new Value(Value.Type.NULL, null)
+                );
+            }
+
+            if (check(TokenType.COMMA)) {
+
+                advance();
+
+                Value value = parseValue();
+
+                if (value.getType() != Value.Type.NULL) {
+
+                    throw new PlugException(
+                            "IS requires a null value.",
+                            peek().getLine()
+                    );
+                }
+
+                consume(
+                        TokenType.RPAREN,
+                        "Expected ')' after condition."
+                );
+
+                return new ComparisonExpression(
+                        field,
+                        "IS NULL",
+                        value
+                );
+            }
+
+            throw new PlugException(
+                    "Expected NULL or a null value after IS.",
+                    peek().getLine()
+            );
+        }
+
         consume(
                 TokenType.COMMA,
                 "Expected ',' after operator."

@@ -1,0 +1,17 @@
+plug.connect(
+    host: "localhost",
+    port: 5432,
+    database: "mydb",
+    username: "victor",
+    password: "secret"
+);
+
+plug.use("users");
+
+plug.get(name, country, balance)
+    .where(
+        (balance, GT, 10000)
+        AND
+        (country, NE, "Nigeria")
+    )
+    .limit(2);
