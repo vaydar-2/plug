@@ -257,6 +257,100 @@ public class MockData {
         userSchema.put("role", String.class);
 
         SCHEMAS.put("users", userSchema);
+
+        /*
+         * orders — 12 orders keyed to user ids plus one row
+         * whose user_id is null, covering the inner-join
+         * drop of null keys. Users 3, 6, 7, 11, 14, 16, 17,
+         * 19 and 20 intentionally have no orders.
+         */
+        List<Map<String, Object>> orders = new ArrayList<>();
+
+        orders.add(orderRow(1, 4, "Laptop", 1200));
+        orders.add(orderRow(2, 4, "Mouse", 25));
+        orders.add(orderRow(3, 1, "Keyboard", 90));
+        orders.add(orderRow(4, 8, "Monitor", 300));
+        orders.add(orderRow(5, 5, "Desk", 450));
+        orders.add(orderRow(6, 12, "Chair", 210));
+        orders.add(orderRow(7, 10, "Webcam", 80));
+        orders.add(orderRow(8, 18, "Headset", 120));
+        orders.add(orderRow(9, 2, "Cable", 15));
+        orders.add(orderRow(10, 9, "Speaker", 150));
+        orders.add(orderRow(11, 15, "Router", 95));
+        orders.add(orderRow(12, 13, "Card", 400));
+
+        Map<String, Object> giftCard = new HashMap<>();
+        giftCard.put("id", 13);
+        giftCard.put("user_id", null);
+        giftCard.put("product", "Gift card");
+        giftCard.put("total", 60);
+        orders.add(giftCard);
+
+        DATA.put("orders", orders);
+
+        Map<String, Class<?>> orderSchema = new HashMap<>();
+        orderSchema.put("id", Integer.class);
+        orderSchema.put("user_id", Integer.class);
+        orderSchema.put("product", String.class);
+        orderSchema.put("total", Integer.class);
+
+        SCHEMAS.put("orders", orderSchema);
+
+        /*
+         * inventory — shares 'product' with orders but not
+         * with users, and carries order_id as its join key,
+         * so a double join can demonstrate ambiguous bare
+         * field resolution.
+         */
+        List<Map<String, Object>> inventory = new ArrayList<>();
+
+        inventory.add(inventoryRow(1, 1, "Laptop", 40));
+        inventory.add(inventoryRow(2, 2, "Mouse", 300));
+        inventory.add(inventoryRow(3, 4, "Monitor", 25));
+        inventory.add(inventoryRow(4, 5, "Desk", 12));
+        inventory.add(inventoryRow(5, 8, "Chair", 30));
+
+        DATA.put("inventory", inventory);
+
+        Map<String, Class<?>> inventorySchema = new HashMap<>();
+        inventorySchema.put("id", Integer.class);
+        inventorySchema.put("order_id", Integer.class);
+        inventorySchema.put("product", String.class);
+        inventorySchema.put("stock", Integer.class);
+
+        SCHEMAS.put("inventory", inventorySchema);
+    }
+
+    private static Map<String, Object> orderRow(
+            int id,
+            Integer userId,
+            String product,
+            int total
+    ) {
+
+        Map<String, Object> row = new HashMap<>();
+        row.put("id", id);
+        row.put("user_id", userId);
+        row.put("product", product);
+        row.put("total", total);
+
+        return row;
+    }
+
+    private static Map<String, Object> inventoryRow(
+            int id,
+            int orderId,
+            String product,
+            int stock
+    ) {
+
+        Map<String, Object> row = new HashMap<>();
+        row.put("id", id);
+        row.put("order_id", orderId);
+        row.put("product", product);
+        row.put("stock", stock);
+
+        return row;
     }
 
     private MockData() {

@@ -66,6 +66,30 @@ plug.get(name, balance)
     .sort(balance, DESC)
     .limit(3);
 
+# ----------------------------------------------------------------- reads: joins
+# Users joined with orders: inner join, dotted projection keys, a
+# bare and a dotted condition, and post-join sort on a qualified field.
+plug.get(name, orders.total)
+    .join(orders, on: (users.id, EQ, orders.user_id))
+    .where((country, EQ, "Ghana"))
+    .sort(orders.total, DESC)
+    .limit(3);
+
+# Bare fields resolve base-first: bare 'total' means orders.total.
+plug.get(name, total)
+    .join(orders, on: (users.id, EQ, orders.user_id))
+    .where((total, BETWEEN, [100, 500]));
+
+# Reversed key orientation works too:
+plug.get(name, orders.product)
+    .join(orders, on: (orders.user_id, EQ, users.id))
+    .where((orders.total, GTE, 400));
+
+# A second join may key against any earlier collection:
+plug.get(users.name, inventory.product, inventory.stock)
+    .join(orders, on: (users.id, EQ, orders.user_id))
+    .join(inventory, on: (orders.id, EQ, inventory.order_id));
+
 # --------------------------------------------------------------- reads: aggregates
 # count over everything, and scoped by a where:
 plug.get(name).count();

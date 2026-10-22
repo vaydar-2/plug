@@ -5,9 +5,23 @@ public class Argument {
     private final String name;
     private final Value value;
 
+    /*
+     * join()'s on: argument carries a condition expression
+     * instead of a literal value; every other argument is a
+     * plain Value and leaves this null.
+     */
+    private final ConditionExpression condition;
+
     public Argument(String name, Value value) {
         this.name = name;
         this.value = value;
+        this.condition = null;
+    }
+
+    public Argument(String name, ConditionExpression condition) {
+        this.name = name;
+        this.value = null;
+        this.condition = condition;
     }
 
     public String getName() {
@@ -18,6 +32,10 @@ public class Argument {
         return value;
     }
 
+    public ConditionExpression getCondition() {
+        return condition;
+    }
+
     @Override
     public String toString() {
 
@@ -25,6 +43,6 @@ public class Argument {
             return value.toString();
         }
 
-        return name + ": " + value;
+        return name + ": " + (condition != null ? condition : value);
     }
 }

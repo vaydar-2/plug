@@ -151,6 +151,71 @@ Direction is `ASC` or `DESC`. The field must be sortable in the schema.
 Whole numbers only; a decimal literal is rejected. `.sort` and `.limit`
 are read features and only valid after `plug.get(...)`.
 
+### .join(...) — combine collections
+
+A read feature that chains after `plug.get(...)`, combining the selected
+collection with one more collection. The join key is a comparison tuple
+whose two sides are collection-qualified fields, matched with `EQ`:
+
+```plug
+plug.get(name, orders.total)
+    .join(orders, on: (users.id, EQ, orders.user_id))
+    .where((country, EQ, "Ghana"))
+    .sort(orders.total, DESC)
+    .limit(3);
+```
+
+Rules:
+
+- The key tuple must use `EQ` and both sides must be qualified —
+  `(id, EQ, orders.user_id)` is rejected, as is any other operator.
+- Exactly one side of the key references the newly joined collection;
+  the other references the base collection or an earlier join — either
+  orientation works:
+
+  ```plug
+  .join(orders, on: (orders.user_id, EQ, users.id))
+  ```
+
+- Multiple joins chain left-to-right; a later join may key against any
+  earlier collection. Joining the same collection twice, or the base
+  collection with itself, is rejected.
+- One side of the key must reference the joined collection and the other
+  must not — a key like `(users.id, EQ, users.name)` is rejected.
+- Inner-join semantics: an unmatched row on either side is dropped, and
+  matches multiply (a user with three orders appears three times).
+  `null` key values never match, SQL-style.
+- `join()` is a read feature: invalid on `update`/`delete` chains and
+  not combinable with aggregates (`count()` etc.).
+- Key fields must exist in their collections and share one type
+  (`Type mismatch in join key` otherwise).
+
+### Dotted field names
+
+Inside any parenthesized context, a field may be collection-qualified:
+`orders.total`, `users.age`. This works in projections, condition
+tuples, `.sort()`, aggregate fields, and join keys:
+
+```plug
+plug.get(name, orders.total)
+    .join(orders, on: (users.id, EQ, orders.user_id))
+    .where((orders.total, BETWEEN, [100, 500]));
+
+plug.get(name).where((users.age, GT, 30));
+
+plug.get(name).sort(users.balance, ASC);
+```
+
+Bare names still work and resolve in order: the base collection first,
+then the joins in chain order. A bare name found in more than one joined
+collection (but not the base) is ambiguous:
+
+    Ambiguous field: product (inventory.product, orders.product)
+
+Qualify such fields to disambiguate. Unqualified base names never
+become ambiguous — bare `id` always means the base collection's `id`.
+Unknown fields still fail type checking as before.
+
 ### Write operations
 
 The write statements use the same grammar and run through the same
@@ -283,7 +348,10 @@ simply skipped, SQL-style).
 - Numbers: integers (`20`, `-7`) and decimals (`3.14`).
 - Booleans: `true`, `false`. Null: `null`.
 - Lists: `[1, 2, 3]`.
-- Bare identifiers name fields.
+- Bare identifiers name fields; inside any parenthesized context a
+  field may be collection-qualified (`orders.total`).
+- A collection name in `join()` is a bare identifier; the `on:`
+  argument takes a `(left, EQ, right)` key tuple.
 
 ### Comments
 
@@ -313,15 +381,16 @@ All failures surface as `PlugException`:
 - `DatabaseAdapter` is the backend contract: `connect`, `execute(plan) →
   QueryResult`, `close`. Adapters return structured results and never print.
 - `DatabaseAdapterRegistry` maps driver names to adapter factories.
-- The mock adapter implements in-memory filtering, sorting, limiting, and
+- The mock adapter implements in-memory filtering, sorting, limiting,
+  joins (nested-loop inner joins over its sample collections), and
   schema/type validation; it is the reference implementation for semantics.
 
 ## Roadmap
 
-1. Complete the prototype language: joins. Aggregates
-   (count/sum/avg/min/max), insert/update/delete, and the operator set
+1. Complete the prototype language. Aggregates
+   (count/sum/avg/min/max), insert/update/delete, the operator set
    (EQ, NE, GT, GTE, LT, LTE, IN, CONTAINS, BETWEEN, LIKE, IS NULL/
-   IS NOT NULL) are done.
+   IS NOT NULL), and joins (`.join(collection, on: ...)`) are done.
 2. Real adapters, in order: PostgreSQL, MongoDB.
 3. PlugDB — a custom database using Plug as its query language.
 4. Adapters for more database categories.

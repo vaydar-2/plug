@@ -231,6 +231,31 @@ public class Runtime {
                 continue;
             }
 
+            if (call.getMethod().equals("join")) {
+
+                if (operation != null) {
+                    throw new PlugException(
+                            "join() is only valid on reads."
+                    );
+                }
+
+                if (aggregate != ExecutionPlan.Aggregate.NONE) {
+                    throw new PlugException(
+                            "join() must come before an aggregate."
+                    );
+                }
+
+                if (query == null) {
+                    throw new PlugException(
+                            "join() must follow get()."
+                    );
+                }
+
+                join(query, call.getArguments());
+
+                continue;
+            }
+
             if (call.getMethod().equals("count")
                     || call.getMethod().equals("sum")
                     || call.getMethod().equals("avg")
@@ -249,6 +274,13 @@ public class Runtime {
                 if (query == null) {
                     throw new PlugException(
                             method + "() must follow get()."
+                    );
+                }
+
+                if (!query.getJoins().isEmpty()) {
+                    throw new PlugException(
+                            "An aggregate cannot be combined "
+                                    + "with join()."
                     );
                 }
 
@@ -606,6 +638,148 @@ public class Runtime {
 
         System.out.println(
                 "Using collection: " + collection
+        );
+    }
+
+    /*
+     * join(orders, on: (users.id, EQ, orders.user_id))
+     * validates the call structure here; collection and
+     * field existence are the adapter's job, because only
+     * the backend knows its own schemas.
+     */
+    private void join(
+            Query query,
+            List<Argument> arguments
+    ) {
+
+        if (arguments.size() != 2) {
+
+            throw new PlugException(
+                    "join() expects a collection and an on: "
+                            + "condition, e.g. join(orders, on: "
+                            + "(users.id, EQ, orders.user_id))."
+            );
+        }
+
+        Argument collectionArgument = arguments.get(0);
+
+        if (collectionArgument.getName() != null
+                || collectionArgument.getValue() == null
+                || collectionArgument.getValue().getType()
+                != Value.Type.IDENTIFIER
+                || collectionArgument.getValue()
+                .getValue()
+                .toString()
+                .contains(".")) {
+
+            throw new PlugException(
+                    "join() expects a bare collection name, "
+                            + "e.g. join(orders, ...)."
+            );
+        }
+
+        String collection =
+                (String) collectionArgument
+                        .getValue()
+                        .getValue();
+
+        Argument onArgument = arguments.get(1);
+
+        if (!"on".equals(onArgument.getName())
+                || !(onArgument.getCondition()
+                instanceof dev.victor.plug.ast.ComparisonExpression)) {
+
+            throw new PlugException(
+                    "join() expects an on: condition, e.g. "
+                            + "on: (users.id, EQ, orders.user_id)."
+            );
+        }
+
+        dev.victor.plug.ast.ComparisonExpression on =
+                (dev.victor.plug.ast.ComparisonExpression)
+                        onArgument.getCondition();
+
+        if (!on.getOperator().equals("EQ")) {
+
+            throw new PlugException(
+                    "join() keys must match with EQ, not "
+                            + on.getOperator() + "."
+            );
+        }
+
+        String leftField = on.getField();
+
+        String rightField = (String) on.getValue().getValue();
+
+        if (on.getValue().getType() != Value.Type.IDENTIFIER) {
+
+            throw new PlugException(
+                    "join() keys must be collection-qualified "
+                            + "field names, e.g. (users.id, EQ, "
+                            + "orders.user_id)."
+            );
+        }
+
+        if (!leftField.contains(".")
+                || !rightField.contains(".")) {
+
+            throw new PlugException(
+                    "join() keys must be collection-qualified, "
+                            + "e.g. (users.id, EQ, orders.user_id)."
+            );
+        }
+
+        String leftCollection =
+                leftField.substring(
+                        0,
+                        leftField.indexOf('.')
+                );
+
+        String rightCollection =
+                rightField.substring(
+                        0,
+                        rightField.indexOf('.')
+                );
+
+        if (leftCollection.equals(rightCollection)) {
+
+            throw new PlugException(
+                    "join() cannot key a collection "
+                            + "to itself: " + leftCollection
+            );
+        }
+
+        String baseCollection =
+                connectionManager
+                        .getContext()
+                        .getCollection();
+
+        for (Join existing : query.getJoins()) {
+
+            if (existing.getCollection()
+                    .equals(collection)) {
+
+                throw new PlugException(
+                        "Duplicate collection in join: "
+                                + collection
+                );
+            }
+        }
+
+        if (collection.equals(baseCollection)) {
+
+            throw new PlugException(
+                    "join() cannot join the base "
+                            + "collection with itself."
+            );
+        }
+
+        query.join(
+                new Join(
+                        leftField,
+                        rightField,
+                        collection
+                )
         );
     }
 

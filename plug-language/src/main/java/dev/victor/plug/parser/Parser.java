@@ -117,6 +117,27 @@ public class Parser {
             );
         }
 
+        /*
+         * join(collection, on: (left, EQ, right)) has its own
+         * argument shape: a bare collection name plus one
+         * named on: argument whose value is a key tuple.
+         */
+        if (method.equals("join")) {
+
+            List<Argument> joinArgs = joinArguments();
+
+            consume(
+                    TokenType.RPAREN,
+                    "Expected ')' after arguments."
+            );
+
+            return new Call(
+                    object,
+                    method,
+                    joinArgs
+            );
+        }
+
         List<Argument> arguments = arguments();
 
         consume(
@@ -129,6 +150,73 @@ public class Parser {
                 method,
                 arguments
         );
+    }
+
+    /*
+     * join() is parsed as two arguments: a positional bare
+     * collection name, and an optional named on: argument
+     * holding a comparison tuple, e.g. (users.id, EQ,
+     * orders.user_id). Structure errors like a missing on:
+     * are reported by the runtime against the real grammar,
+     * so the parser only rejects malformed syntax here.
+     */
+    private List<Argument> joinArguments() {
+
+        List<Argument> arguments = new ArrayList<>();
+
+        String collection =
+                consumeIdentifier(
+                        "Expected a collection name in join()."
+                );
+
+        arguments.add(
+                new Argument(
+                        null,
+                        new Value(
+                                Value.Type.IDENTIFIER,
+                                collection
+                        )
+                )
+        );
+
+        boolean comma = match(TokenType.COMMA);
+
+        if (!comma) {
+
+            throw new PlugException(
+                    "join() requires an on: condition, e.g. "
+                            + "join(orders, on: (users.id, EQ, "
+                            + "orders.user_id)).",
+                    peek().getLine()
+            );
+        }
+
+        if (check(TokenType.IDENTIFIER)
+                && peek().getValue().equals("on")
+                && peekNext().getType() == TokenType.COLON) {
+
+            advance();
+
+            advance();
+
+            ConditionExpression condition =
+                    comparisonExpression();
+
+            arguments.add(
+                    new Argument(
+                            "on",
+                            condition
+                    )
+            );
+        } else {
+
+            throw new PlugException(
+                    "Expected 'on:' after the collection in join().",
+                    peek().getLine()
+            );
+        }
+
+        return arguments;
     }
 
     private List<Argument> arguments() {
@@ -169,6 +257,29 @@ public class Parser {
         } while (match(TokenType.COMMA));
 
         return arguments;
+    }
+
+    /*
+     * Field names may be collection-qualified inside any
+     * parenthesized context: values like orders.total and
+     * users.id. The DOT token there can only mean a dotted
+     * field — statement-level chain dots always appear
+     * after a closing parenthesis, never inside a call's
+     * arguments.
+     */
+    private String qualifyFieldName(String first) {
+
+        while (check(TokenType.DOT)
+                && peekNext().getType() == TokenType.IDENTIFIER) {
+
+            advance();
+
+            first = first
+                    + "."
+                    + advance().getValue();
+        }
+
+        return first;
     }
 
     private Value parseValue() {
@@ -237,7 +348,7 @@ public class Parser {
 
             return new Value(
                     Value.Type.IDENTIFIER,
-                    token.getValue()
+                    qualifyFieldName(token.getValue())
             );
         }
 
@@ -409,9 +520,26 @@ public class Parser {
 
         if (next.getType() == TokenType.IDENTIFIER) {
 
-            Token afterNext = peekNextNext();
+            /*
+             * A dotted field (users.age, ...) advances the
+             * scan past the qualification before checking
+             * whether a ',' ends the field position.
+             */
+            int index = current + 2;
 
-            if (afterNext.getType() == TokenType.COMMA) {
+            if (index < tokens.size()
+                    && tokens.get(index).getType()
+                    == TokenType.DOT
+                    && index + 1 < tokens.size()
+                    && tokens.get(index + 1).getType()
+                    == TokenType.IDENTIFIER) {
+
+                index += 2;
+            }
+
+            if (index >= tokens.size()
+                    || tokens.get(index).getType()
+                    == TokenType.COMMA) {
 
                 return comparisonExpression();
             }
@@ -433,6 +561,17 @@ public class Parser {
         return expression;
     }
 
+    private String consumeFieldName(String message) {
+
+        String field =
+                consume(
+                        TokenType.IDENTIFIER,
+                        message
+                ).getValue();
+
+        return qualifyFieldName(field);
+    }
+
     private ConditionExpression comparisonExpression() {
 
         consume(
@@ -441,9 +580,7 @@ public class Parser {
         );
 
         String field =
-                consumeIdentifier(
-                        "Expected field name."
-                );
+                consumeFieldName("Expected field name.");
 
         consume(
                 TokenType.COMMA,

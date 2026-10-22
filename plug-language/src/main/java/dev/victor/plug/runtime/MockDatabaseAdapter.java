@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -82,6 +83,24 @@ public class MockDatabaseAdapter implements DatabaseAdapter {
             throw new PlugException(
                     "Schema not found for collection: "
                             + collection
+            );
+        }
+
+        if (!plan.getQuery().getJoins().isEmpty()) {
+
+            if (plan.getAggregate()
+                    != ExecutionPlan.Aggregate.NONE) {
+
+                throw new PlugException(
+                        "An aggregate cannot be combined "
+                                + "with join()."
+                );
+            }
+
+            return readWithJoins(
+                    plan,
+                    records,
+                    schema
             );
         }
 
@@ -211,6 +230,586 @@ public class MockDatabaseAdapter implements DatabaseAdapter {
         return new QueryResult(
                 rows.size(),
                 rows
+        );
+    }
+
+    /*
+     * Joining reads: validate every join key against the
+     * real schemas, resolve qualified and bare field names
+     * for conditions and sort, then run a nested-loop inner
+     * join across the requested collections left-to-right.
+     * Joins execute before where()/sort()/limit() apply, so
+     * conditions filter the joined result (SQL WHERE on the
+     * join), and duplicates multiply rows.
+     */
+    private QueryResult readWithJoins(
+            ExecutionPlan plan,
+            List<Map<String, Object>> baseRecords,
+            Map<String, Class<?>> baseSchema
+    ) {
+
+        Query query = plan.getQuery();
+
+        String baseCollection = plan.getCollection();
+
+        /*
+         * Schemas in join order: the base first, then each
+         * joined collection. Later joins may reference any
+         * earlier collection in their keys and conditions.
+         */
+        LinkedHashMap<String, Map<String, Class<?>>> schemas =
+                new LinkedHashMap<>();
+
+        schemas.put(baseCollection, baseSchema);
+
+        for (Join join : query.getJoins()) {
+
+            Map<String, Class<?>> joinedSchema =
+                    MockData.SCHEMAS.get(join.getCollection());
+
+            if (joinedSchema == null) {
+                throw new PlugException(
+                        "Collection not found: "
+                                + join.getCollection()
+                );
+            }
+
+            schemas.put(
+                    join.getCollection(),
+                    joinedSchema
+            );
+        }
+
+        for (Join join : query.getJoins()) {
+            validateJoin(
+                    join,
+                    schemas
+            );
+        }
+
+        for (Condition condition :
+                query.getConditions()) {
+
+            validateResolvedCondition(
+                    condition,
+                    schemas,
+                    baseCollection
+            );
+        }
+
+        if (query.getExpression() != null) {
+
+            validateResolvedExpression(
+                    query.getExpression(),
+                    schemas,
+                    baseCollection
+            );
+        }
+
+        Sort sort = query.getSort();
+
+        String sortField = null;
+
+        Map<String, Class<?>> sortSchema = null;
+
+        if (sort != null) {
+
+            sortField = resolveField(
+                    sort.getField(),
+                    schemas,
+                    baseCollection
+            );
+
+            sortSchema = schemas.get(
+                    collectionOf(sortField)
+            );
+
+            Class<?> fieldType = sortSchema.get(
+                    bareName(sortField)
+            );
+
+            if (!Comparable.class
+                    .isAssignableFrom(fieldType)) {
+
+                throw new PlugException(
+                        "Field '" + sort.getField()
+                                + "' cannot be sorted."
+                );
+            }
+        }
+
+        /*
+         * Nested-loop inner join. Combined records carry
+         * every field of every collection under its
+         * qualified name ("users.id"), plus the bare name
+         * for fields resolvable by the base-first rule;
+         * bare names that would collide silently pick the
+         * first collection to define them.
+         */
+        List<Map<String, Object>> current = new ArrayList<>();
+
+        for (Map<String, Object> record : baseRecords) {
+
+            Map<String, Object> qualified =
+                    new HashMap<>();
+
+            mergeRecord(
+                    qualified,
+                    record,
+                    baseCollection
+            );
+
+            current.add(qualified);
+        }
+
+        for (Join join : query.getJoins()) {
+
+            List<Map<String, Object>> joinedRecords =
+                    MockData.DATA.get(join.getCollection());
+
+            List<Map<String, Object>> combined =
+                    new ArrayList<>();
+
+            /*
+             * One side of the key always belongs to the
+             * newly joined collection — validation proved
+             * exactly one side does.
+             */
+            boolean leftIsJoined =
+                    collectionOf(join.getLeftField())
+                            .equals(join.getCollection());
+
+            String joinedRowKey = leftIsJoined
+                    ? bareName(join.getLeftField())
+                    : bareName(join.getRightField());
+
+            String existingRowKey = leftIsJoined
+                    ? join.getRightField()
+                    : join.getLeftField();
+
+            for (Map<String, Object> record : current) {
+
+                Object keyValue =
+                        record.get(existingRowKey);
+
+                /* Null keys never match (SQL-style). */
+                if (keyValue == null) {
+                    continue;
+                }
+
+                for (Map<String, Object> joinedRecord :
+                        joinedRecords) {
+
+                    Object joinedKey =
+                            joinedRecord.get(joinedRowKey);
+
+                    if (joinedKey == null) {
+                        continue;
+                    }
+
+                    if (keyValue.equals(joinedKey)) {
+
+                        Map<String, Object> merged =
+                                new HashMap<>(record);
+
+                        mergeRecord(
+                                merged,
+                                joinedRecord,
+                                join.getCollection()
+                        );
+
+                        combined.add(merged);
+                    }
+                }
+            }
+
+            current = combined;
+        }
+
+        /*
+         * Conditions filter the joined rows; evaluation uses
+         * the unmodified query because every qualified and
+         * resolvable bare name is present as a record key.
+         */
+        List<Map<String, Object>> filteredRecords =
+                new ArrayList<>();
+
+        for (Map<String, Object> record : current) {
+
+            if (evaluateQuery(query, record)) {
+                filteredRecords.add(record);
+            }
+        }
+
+        if (sort != null) {
+
+            final String resolvedSortField = sortField;
+
+            Comparator<Map<String, Object>> comparator =
+                    (first, second) -> {
+
+                        Comparable firstValue =
+                                (Comparable) first.get(
+                                        resolvedSortField
+                                );
+
+                        Comparable secondValue =
+                                (Comparable) second.get(
+                                        resolvedSortField
+                                );
+
+                        return firstValue.compareTo(
+                                secondValue
+                        );
+                    };
+
+            if (sort.getDirection().equals("DESC")) {
+                comparator = comparator.reversed();
+            }
+
+            filteredRecords.sort(comparator);
+        }
+
+        Integer limit = query.getLimit();
+
+        if (limit != null
+                && filteredRecords.size() > limit) {
+
+            filteredRecords = new ArrayList<>(
+                    filteredRecords.subList(0, limit)
+            );
+        }
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+
+        for (Map<String, Object> record : filteredRecords) {
+
+            Map<String, Object> result = new HashMap<>();
+
+            for (String field : query.getFields()) {
+
+                if (record.containsKey(field)) {
+                    result.put(field, record.get(field));
+                }
+            }
+
+            rows.add(result);
+        }
+
+        return new QueryResult(rows.size(), rows);
+    }
+
+    /*
+     * A record of one collection merged into a joined row:
+     * every field is added under its qualified name, and
+     * the bare name is added first-write-wins so that base
+     * fields shadow joined ones and earlier joins shadow
+     * later ones (users.id wins a bare 'id'; bare 'total'
+     * resolves to orders.total only when nothing earlier
+     * defines a total). Ambiguous names are rejected during
+     * condition validation, before evaluation sees them.
+     */
+    private void mergeRecord(
+            Map<String, Object> target,
+            Map<String, Object> record,
+            String collection
+    ) {
+
+        for (Map.Entry<String, Object> entry :
+                record.entrySet()) {
+
+            String field = entry.getKey();
+
+            target.put(
+                    collection + "." + field,
+                    entry.getValue()
+            );
+
+            if (!target.containsKey(field)) {
+                target.put(field, entry.getValue());
+            }
+        }
+    }
+
+    /*
+     * Structure of a key pair: both sides collection-
+     * qualified, fields existing in their collections,
+     * exactly one side referencing the newly joined
+     * collection, and matching key types.
+     */
+    private void validateJoin(
+            Join join,
+            Map<String, Map<String, Class<?>>> schemas
+    ) {
+
+        validateJoinSide(
+                join.getLeftField(),
+                schemas
+        );
+
+        validateJoinSide(
+                join.getRightField(),
+                schemas
+        );
+
+        String leftCollection =
+                collectionOf(join.getLeftField());
+
+        String rightCollection =
+                collectionOf(join.getRightField());
+
+        boolean leftIsJoined =
+                leftCollection.equals(join.getCollection());
+
+        boolean rightIsJoined =
+                rightCollection.equals(join.getCollection());
+
+        if (leftIsJoined == rightIsJoined) {
+
+            throw new PlugException(
+                    "join() key must reference the joined "
+                            + "collection on one side and an "
+                            + "existing collection on the other: "
+                            + "(" + join.getLeftField()
+                            + ", EQ, "
+                            + join.getRightField() + ")"
+            );
+        }
+
+        Class<?> leftType = schemas
+                .get(leftCollection)
+                .get(bareName(join.getLeftField()));
+
+        Class<?> rightType = schemas
+                .get(rightCollection)
+                .get(bareName(join.getRightField()));
+
+        if (!leftType.equals(rightType)) {
+
+            throw new PlugException(
+                    "Type mismatch in join key: "
+                            + join.getLeftField() + " ("
+                            + leftType.getSimpleName() + ") vs "
+                            + join.getRightField() + " ("
+                            + rightType.getSimpleName() + ")"
+            );
+        }
+    }
+
+    private void validateJoinSide(
+            String field,
+            Map<String, Map<String, Class<?>>> schemas
+    ) {
+
+        String collection = collectionOf(field);
+
+        Map<String, Class<?>> schema =
+                schemas.get(collection);
+
+        if (schema == null) {
+            throw new PlugException(
+                    "Unknown collection in join key: "
+                            + collection
+            );
+        }
+
+        if (!schema.containsKey(bareName(field))) {
+
+            throw new PlugException(
+                    "Unknown field: " + field
+            );
+        }
+    }
+
+    /*
+     * Field resolution inside joined reads.
+     *
+     * "orders.total" is exact: the collection must be part
+     * of the join and must define the field.
+     *
+     * A bare "total" resolves base-first: the base
+     * collection wins immediately, otherwise the joins are
+     * searched in chain order and a name found in more
+     * than one joined collection is ambiguous.
+     */
+    private String resolveField(
+            String field,
+            Map<String, Map<String, Class<?>>> schemas,
+            String baseCollection
+    ) {
+
+        if (field.contains(".")) {
+
+            String collection = collectionOf(field);
+
+            Map<String, Class<?>> schema =
+                    schemas.get(collection);
+
+            if (schema == null) {
+
+                throw new PlugException(
+                        "Unknown collection in field: "
+                                + field
+                );
+            }
+
+            if (!schema.containsKey(bareName(field))) {
+
+                throw new PlugException(
+                        "Unknown field: " + field
+                );
+            }
+
+            return field;
+        }
+
+        Map<String, Class<?>> baseSchema =
+                schemas.get(baseCollection);
+
+        if (baseSchema.containsKey(field)) {
+            return baseCollection + "." + field;
+        }
+
+        List<String> matches = new ArrayList<>();
+
+        for (Map.Entry<String, Map<String, Class<?>>> entry :
+                schemas.entrySet()) {
+
+            if (entry.getKey().equals(baseCollection)) {
+                continue;
+            }
+
+            if (entry.getValue().containsKey(field)) {
+                matches.add(
+                        entry.getKey() + "." + field
+                );
+            }
+        }
+
+        if (matches.isEmpty()) {
+
+            throw new PlugException(
+                    "Unknown field: " + field
+            );
+        }
+
+        if (matches.size() > 1) {
+
+            throw new PlugException(
+                    "Ambiguous field: " + field + " ("
+                            + String.join(
+                            ", ",
+                            matches
+                    ) + ")"
+            );
+        }
+
+        return matches.get(0);
+    }
+
+    private void validateResolvedCondition(
+            Condition condition,
+            Map<String, Map<String, Class<?>>> schemas,
+            String baseCollection
+    ) {
+
+        String resolved = resolveField(
+                condition.getField(),
+                schemas,
+                baseCollection
+        );
+
+        /*
+         * validateCondition matches bare schema keys, so the
+         * resolved field is stripped back to its bare name
+         * and checked against the schema of the collection
+         * it resolved to.
+         */
+        validateCondition(
+                new Condition(
+                        bareName(resolved),
+                        condition.getOperator(),
+                        condition.getValue(),
+                        condition.getLogicalOperator()
+                ),
+                schemas.get(collectionOf(resolved))
+        );
+    }
+
+    private void validateResolvedExpression(
+            ConditionExpression expression,
+            Map<String, Map<String, Class<?>>> schemas,
+            String baseCollection
+    ) {
+
+        if (expression instanceof ComparisonExpression) {
+
+            ComparisonExpression comparison =
+                    (ComparisonExpression) expression;
+
+            validateResolvedCondition(
+                    new Condition(
+                            comparison.getField(),
+                            comparison.getOperator(),
+                            comparison.getValue(),
+                            Condition.LogicalOperator.AND
+                    ),
+                    schemas,
+                    baseCollection
+            );
+
+            return;
+        }
+
+        if (expression instanceof LogicalExpression) {
+
+            LogicalExpression logical =
+                    (LogicalExpression) expression;
+
+            validateResolvedExpression(
+                    logical.getLeft(),
+                    schemas,
+                    baseCollection
+            );
+
+            validateResolvedExpression(
+                    logical.getRight(),
+                    schemas,
+                    baseCollection
+            );
+
+            return;
+        }
+
+        if (expression instanceof NotExpression) {
+
+            validateResolvedExpression(
+                    ((NotExpression) expression)
+                            .getExpression(),
+                    schemas,
+                    baseCollection
+            );
+
+            return;
+        }
+
+        throw new PlugException(
+                "Unknown condition expression."
+        );
+    }
+
+    private String collectionOf(String qualified) {
+
+        return qualified.substring(
+                0,
+                qualified.indexOf('.')
+        );
+    }
+
+    private String bareName(String qualified) {
+
+        return qualified.substring(
+                qualified.indexOf('.') + 1
         );
     }
 

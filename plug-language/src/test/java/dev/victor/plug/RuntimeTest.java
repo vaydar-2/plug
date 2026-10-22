@@ -75,7 +75,7 @@ public class RuntimeTest {
         return buffer.toString(StandardCharsets.UTF_8);
     }
 
-    private String connectAndSelect =
+    private static final String connectAndSelect =
             "plug.connect(host: \"localhost\", port: 5432, "
                     + "database: \"mydb\", username: \"victor\", "
                     + "password: \"secret\");\n"
@@ -288,14 +288,14 @@ public class RuntimeTest {
                         () -> runCaptured(
                                 connectAndSelect.replace(
                                         "users",
-                                        "orders"
+                                        "products"
                                 )
                                         + "plug.get(name);"
                         )
                 );
 
         assertEquals(
-                "Collection not found: orders",
+                "Collection not found: products",
                 exception.getMessage()
         );
     }
@@ -1164,6 +1164,324 @@ public class RuntimeTest {
         assertTrue(
                 exception.getMessage().contains(
                         "Expected NULL after IS NOT."
+                )
+        );
+    }
+
+    /*
+     * ------------------------------------------------------------------ joins
+     *
+     * The mock data ships 12 orders keyed to user ids plus
+     * one order whose user_id is null, and an inventory
+     * collection whose 'product' field collides with
+     * orders' — cases these tests pin down.
+     */
+    private static final String ghanaJoin =
+            connectAndSelect
+                    + "plug.get(name, orders.product, orders.total)"
+                    + ".join(orders, on: (users.id, EQ, orders.user_id))"
+                    + ".where((country, EQ, \"Ghana\"))"
+                    + ".sort(orders.total, DESC)"
+                    + ".limit(3);\n";
+
+    @Test
+    public void joinCombinesAndFiltersCollections() {
+
+        String output = runCaptured(ghanaJoin);
+
+        /*
+         * Ghana users have 6 matching joined rows; the count
+         * reports rows after sort/limit, so 3.
+         */
+        assertTrue(output.contains("Records found: 3"));
+
+        assertTrue(output.contains(
+                "{name=Jessica, orders.total=400, orders.product=Card}"
+        ));
+
+        assertTrue(output.contains(
+                "{name=James, orders.total=300, orders.product=Monitor}"
+        ));
+
+        assertTrue(output.contains(
+                "{name=Thomas, orders.total=120, orders.product=Headset}"
+        ));
+    }
+
+    @Test
+    public void joinAcceptsEitherKeyOrientation() {
+
+        String output = runCaptured(
+                connectAndSelect
+                        + "plug.get(name, orders.product)"
+                        + ".join(orders, on: (orders.user_id, EQ, users.id))"
+                        + ".where((orders.total, BETWEEN, [100, 500]));\n"
+        );
+
+        assertTrue(output.contains("Records found: 6"));
+
+        assertTrue(output.contains(
+                "{name=Sarah, orders.product=Desk}"
+        ));
+
+        assertTrue(output.contains(
+                "{name=Linda, orders.product=Speaker}"
+        ));
+    }
+
+    @Test
+    public void joinDropsNullKeysAndRowlessRecords() {
+
+        /*
+         * 13 orders exist but one has a null user_id, and
+         * nine users have no orders: an inner join over
+         * users matches exactly 12 rows.
+         */
+        String output = runCaptured(
+                connectAndSelect
+                        + "plug.get(name, orders.product)"
+                        + ".join(orders, on: (users.id, EQ, orders.user_id));\n"
+        );
+
+        assertTrue(output.contains("Records found: 12"));
+
+        /* The Gift card order has a null join key. */
+        assertTrue(!output.contains("Gift card"));
+    }
+
+    @Test
+    public void joinBareIdResolvesToBaseCollection() {
+
+        String output = runCaptured(
+                connectAndSelect
+                        + "plug.get(name, orders.product)"
+                        + ".join(orders, on: (users.id, EQ, orders.user_id))"
+                        + ".where((id, EQ, 1));\n"
+        );
+
+        /* Bare 'id' means users.id, which is Victor. */
+        assertTrue(output.contains("Records found: 1"));
+
+        assertTrue(output.contains(
+                "{name=Victor, orders.product=Keyboard}"
+        ));
+    }
+
+    @Test
+    public void joinBareFieldResolvesToJoinedCollection() {
+
+        /*
+         * 'total' exists only in orders, so it resolves to
+         * orders.total without needing qualification.
+         */
+        String output = runCaptured(
+                connectAndSelect
+                        + "plug.get(name, total)"
+                        + ".join(orders, on: (users.id, EQ, orders.user_id))"
+                        + ".where((total, GT, 200));\n"
+        );
+
+        assertTrue(output.contains("Records found: 5"));
+
+        assertTrue(output.contains("{total=1200, name=Michael}"));
+    }
+
+    @Test
+    public void joinExpressionWhereUsesQualifiedFields() {
+
+        String output = runCaptured(
+                connectAndSelect
+                        + "plug.get(name)"
+                        + ".join(orders, on: (users.id, EQ, orders.user_id))"
+                        + ".where((orders.total, GT, 200) OR (country, EQ, \"Kenya\"));\n"
+        );
+
+        assertTrue(output.contains("Records found: 6"));
+
+        assertTrue(!output.contains("Victor"));
+    }
+
+    @Test
+    public void joinRejectsAmbiguousBareField() {
+
+        PlugException exception =
+                assertThrows(
+                        PlugException.class,
+                        () -> runCaptured(
+                                connectAndSelect
+                                        + "plug.get(name)"
+                                        + ".join(orders, on: (users.id, EQ, orders.user_id))"
+                                        + ".join(inventory, on: (orders.id, EQ, inventory.order_id))"
+                                        + ".where((product, EQ, \"Laptop\"));\n"
+                        )
+                );
+
+        assertTrue(
+                exception.getMessage().contains(
+                        "Ambiguous field: product"
+                )
+        );
+    }
+
+    @Test
+    public void joinRejectsNonEqualityKey() {
+
+        PlugException exception =
+                assertThrows(
+                        PlugException.class,
+                        () -> runCaptured(
+                                connectAndSelect
+                                        + "plug.get(name)"
+                                        + ".join(orders, on: (users.id, GT, orders.user_id));\n"
+                        )
+                );
+
+        assertTrue(
+                exception.getMessage().contains(
+                        "join() keys must match with EQ"
+                )
+        );
+    }
+
+    @Test
+    public void joinRejectsUnqualifiedKeys() {
+
+        PlugException exception =
+                assertThrows(
+                        PlugException.class,
+                        () -> runCaptured(
+                                connectAndSelect
+                                        + "plug.get(name)"
+                                        + ".join(orders, on: (id, EQ, orders.user_id));\n"
+                        )
+                );
+
+        assertTrue(
+                exception.getMessage().contains(
+                        "collection-qualified"
+                )
+        );
+    }
+
+    @Test
+    public void joinRejectsSelfReferencingKey() {
+
+        PlugException exception =
+                assertThrows(
+                        PlugException.class,
+                        () -> runCaptured(
+                                connectAndSelect
+                                        + "plug.get(name)"
+                                        + ".join(orders, on: (users.id, EQ, users.name));\n"
+                        )
+                );
+
+        assertTrue(
+                exception.getMessage().contains(
+                        "cannot key a collection to itself"
+                )
+        );
+    }
+
+    @Test
+    public void joinRejectsUnknownCollection() {
+
+        PlugException exception =
+                assertThrows(
+                        PlugException.class,
+                        () -> runCaptured(
+                                connectAndSelect
+                                        + "plug.get(name)"
+                                        + ".join(categories, on: (users.id, EQ, categories.id));\n"
+                        )
+                );
+
+        assertTrue(
+                exception.getMessage().contains(
+                        "Collection not found: categories"
+                )
+        );
+    }
+
+    @Test
+    public void joinRejectsDuplicateCollection() {
+
+        PlugException exception =
+                assertThrows(
+                        PlugException.class,
+                        () -> runCaptured(
+                                connectAndSelect
+                                        + "plug.get(name)"
+                                        + ".join(orders, on: (users.id, EQ, orders.user_id))"
+                                        + ".join(orders, on: (users.id, EQ, orders.user_id));\n"
+                        )
+                );
+
+        assertTrue(
+                exception.getMessage().contains(
+                        "Duplicate collection in join: orders"
+                )
+        );
+    }
+
+    @Test
+    public void joinRejectsMismatchedKeyTypes() {
+
+        PlugException exception =
+                assertThrows(
+                        PlugException.class,
+                        () -> runCaptured(
+                                connectAndSelect
+                                        + "plug.get(name)"
+                                        + ".join(orders, on: (users.name, EQ, orders.user_id));\n"
+                        )
+                );
+
+        assertTrue(
+                exception.getMessage().contains(
+                        "Type mismatch in join key"
+                )
+        );
+    }
+
+    @Test
+    public void joinRejectsOnWrites() {
+
+        PlugException exception =
+                assertThrows(
+                        PlugException.class,
+                        () -> runCaptured(
+                                connectAndSelect
+                                        + "plug.update(balance: 1)"
+                                        + ".join(orders, on: (users.id, EQ, orders.user_id))"
+                                        + ".where((id, EQ, 1));\n"
+                        )
+                );
+
+        assertTrue(
+                exception.getMessage().contains(
+                        "join() is only valid on reads."
+                )
+        );
+    }
+
+    @Test
+    public void joinRejectsWithAggregates() {
+
+        PlugException exception =
+                assertThrows(
+                        PlugException.class,
+                        () -> runCaptured(
+                                connectAndSelect
+                                        + "plug.get(name)"
+                                        + ".join(orders, on: (users.id, EQ, orders.user_id))"
+                                        + ".count();\n"
+                        )
+                );
+
+        assertTrue(
+                exception.getMessage().contains(
+                        "An aggregate cannot be combined with join()."
                 )
         );
     }

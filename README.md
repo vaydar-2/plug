@@ -54,11 +54,11 @@ bundled in-memory `mock` adapter. Status of the language itself:
 | Writes: `insert` (auto-increment ids, escaping, nulls), gated `update` / `delete` | ✅ done |
 | Aggregates: `count()`, `sum(f)`, `avg(f)`, `min(f)`, `max(f)` | ✅ done |
 | Schema/type validation against the collection | ✅ done |
-| **Joins** (syntax designed; `.join(collection, on: (…, EQ, …))` with dotted `collection.field` names) | ⬜ next |
-| **PostgreSQL adapter** | ⬜ after joins |
+| **Joins**: `.join(collection, on: (left, EQ, right))`, inner-join semantics, dotted `collection.field` names, base-first bare resolution | ✅ done |
+| **PostgreSQL adapter** (the first real backend) | ⬜ next |
 | MongoDB adapter, PlugDB, other backends | ⬜ later |
 
-Test suite: **81 tests, all green** (JUnit 5, run through the console
+Test suite: **101 tests, all green** (JUnit 5, run through the console
 standalone launcher).
 
 ### Running the language
@@ -117,11 +117,12 @@ PlugDB hosts the runtime itself as its query engine.
 
 ## Roadmap
 
-1. Joins in the language and the mock adapter (design: chained
-   `.join(right, on: (left.qualified, EQ, right.qualified))`, inner join,
-   dotted field qualification, rejections on writes).
+1. Joins in the language and the mock adapter — **done**: chained
+   `.join(collection, on: (left.qualified, EQ, right.qualified))`,
+   inner-join semantics, dotted field qualification, rejections on
+   writes and with aggregates.
 2. PostgreSQL adapter — the first real backend, implemented against the
-   same adapter contract once the query model is frozen by joins.
+   same adapter contract now that the query model is frozen by joins.
 3. MongoDB adapter, then PlugDB — a custom engine whose native language
    *is* Plug.
 4. `plug-cli` extracts the console launcher out of `plug-language`.

@@ -229,4 +229,130 @@ public class ParserTest {
                 exception.getMessage()
         );
     }
+
+    /*
+     * ----------------------------------------------------------- joins
+     */
+
+    @Test
+    public void parsesJoinWithDottedKeyTuple() {
+
+        List<Statement> statements = parseStatements(
+                "plug.get(name).join(orders, on: (users.id, EQ, orders.user_id));"
+        );
+
+        List<Call> calls = statements.get(0).getCalls();
+
+        assertEquals(2, calls.size());
+
+        Call joinCall = calls.get(1);
+
+        assertEquals("join", joinCall.getMethod());
+
+        assertEquals(2, joinCall.getArguments().size());
+
+        assertEquals(
+                null,
+                joinCall.getArguments().get(0).getName()
+        );
+
+        assertEquals(
+                "orders",
+                joinCall.getArguments().get(0).getValue().getValue()
+        );
+
+        assertEquals(
+                "on",
+                joinCall.getArguments().get(1).getName()
+        );
+
+        ComparisonExpression on = assertInstanceOf(
+                ComparisonExpression.class,
+                joinCall.getArguments().get(1).getCondition()
+        );
+
+        assertEquals("users.id", on.getField());
+
+        assertEquals("EQ", on.getOperator());
+
+        assertEquals(
+                "orders.user_id",
+                on.getValue().getValue()
+        );
+    }
+
+    @Test
+    public void parsesDottedProjectionFields() {
+
+        List<Statement> statements = parseStatements(
+                "plug.get(name, orders.total);"
+        );
+
+        Call getCall = statements.get(0).getCalls().get(0);
+
+        assertEquals(2, getCall.getArguments().size());
+
+        assertEquals(
+                "name",
+                getCall.getArguments().get(0).getValue().getValue()
+        );
+
+        assertEquals(
+                "orders.total",
+                getCall.getArguments().get(1).getValue().getValue()
+        );
+    }
+
+    @Test
+    public void parsesDottedWhereTuple() {
+
+        List<Statement> statements = parseStatements(
+                "plug.get(name).where((users.age, GT, 18));"
+        );
+
+        ComparisonExpression comparison = assertInstanceOf(
+                ComparisonExpression.class,
+                statements.get(0).getCalls().get(1).getExpression()
+        );
+
+        assertEquals("users.age", comparison.getField());
+
+        assertEquals("GT", comparison.getOperator());
+    }
+
+    @Test
+    public void rejectsJoinWithoutOnClause() {
+
+        PlugException exception =
+                assertThrows(
+                        PlugException.class,
+                        () -> parseStatements(
+                                "plug.get(name).join(orders);"
+                        )
+                );
+
+        assertTrue(
+                exception.getMessage().contains(
+                        "join() requires an on: condition"
+                )
+        );
+    }
+
+    @Test
+    public void rejectsJoinOnWithoutColon() {
+
+        PlugException exception =
+                assertThrows(
+                        PlugException.class,
+                        () -> parseStatements(
+                                "plug.get(name).join(orders, onx (a, EQ, b));"
+                        )
+                );
+
+        assertTrue(
+                exception.getMessage().contains(
+                        "Expected 'on:'"
+                )
+        );
+    }
 }

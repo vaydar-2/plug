@@ -12,6 +12,7 @@ public class Query {
 
     private final List<String> fields;
     private final List<Condition> conditions;
+    private final List<Join> joins;
 
     private Sort sort;
     private Integer limit;
@@ -22,6 +23,7 @@ public class Query {
 
         this.fields = fields;
         this.conditions = new ArrayList<>();
+        this.joins = new ArrayList<>();
     }
 
     public Query where(
@@ -76,6 +78,23 @@ public class Query {
         );
 
         return this;
+    }
+
+    /*
+     * Joins attach to reads only and are validated against
+     * the backend schemas by the adapter. Fields anywhere
+     * in the query may reference joined collections through
+     * collection-qualified ("orders.total") names.
+     */
+    public Query join(Join join) {
+
+        joins.add(join);
+
+        return this;
+    }
+
+    public List<Join> getJoins() {
+        return joins;
     }
 
     public Query sort(
@@ -137,6 +156,7 @@ public class Query {
                 "fields=" + fields +
                 ", conditions=" + conditions +
                 ", expression=" + expression +
+                ", joins=" + joins +
                 ", sort=" + sort +
                 ", limit=" + limit +
                 '}';
