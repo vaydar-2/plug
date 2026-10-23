@@ -24,9 +24,9 @@ The full system is organized as independent modules:
 | Module                      | Status      | Purpose                                                                 |
 |-----------------------------|-------------|-------------------------------------------------------------------------|
 | `plug-language/`            | **active**  | Lexer, parser, AST, query engine, runtime, and the shared adapter contract |
+| PostgreSQL adapter (inside `runtime/`)   | **active**  | PostgreSQL implementation of the database adapter contract              |
 | `plug-cli/`                 | planned     | Terminal application for running `.plug` files, connecting, managing commands |
 | `plug-studio/`              | planned     | Future GUI: script editor, syntax highlighting, results, connection management, debugging |
-| `plug-adapter-postgresql/`  | planned     | PostgreSQL implementation of the database adapter contract               |
 | `plug-adapter-mongodb/`     | planned     | MongoDB implementation of the same contract                              |
 | `plugdb/`                   | planned     | Custom database engine that uses Plug as its native query language        |
 | `plug-docs/` (or `docs/`)   | planned     | Language reference, tutorials, installation instructions, adapter guides |
@@ -55,11 +55,13 @@ bundled in-memory `mock` adapter. Status of the language itself:
 | Aggregates: `count()`, `sum(f)`, `avg(f)`, `min(f)`, `max(f)` | ✅ done |
 | Schema/type validation against the collection | ✅ done |
 | **Joins**: `.join(collection, on: (left, EQ, right))`, inner-join semantics, dotted `collection.field` names, base-first bare resolution | ✅ done |
-| **PostgreSQL adapter** (the first real backend) | ⬜ next |
-| MongoDB adapter, PlugDB, other backends | ⬜ later |
+| **PostgreSQL adapter** (the first real backend) | ✅ done |
+| **PostgreSQL adapter** selections: `driver: "postgres"` / `"postgresql"` alias, schema introspection from `information_schema`, parameterized SQL, gated integration tests | ✅ done |
+| MongoDB adapter, PlugDB, other backends | ⬜ next |
 
-Test suite: **101 tests, all green** (JUnit 5, run through the console
-standalone launcher).
+Test suite: **132 tests, all green** (JUnit 5, run through the console
+standalone launcher; the 3 PostgreSQL integration tests skip silently
+unless `PLUG_PG_HOST` points at a reachable server).
 
 ### Running the language
 
@@ -121,8 +123,11 @@ PlugDB hosts the runtime itself as its query engine.
    `.join(collection, on: (left.qualified, EQ, right.qualified))`,
    inner-join semantics, dotted field qualification, rejections on
    writes and with aggregates.
-2. PostgreSQL adapter — the first real backend, implemented against the
-   same adapter contract now that the query model is frozen by joins.
+2. PostgreSQL adapter — **done**: `driver: "postgres"` (alias
+   `"postgresql"`), schemas introspected from `information_schema`, all
+   queries compile to parameterized SQL by `PostgresQueryCompiler`, with
+   shared validation in `QueryValidation` so both adapters enforce the
+   identical contract.
 3. MongoDB adapter, then PlugDB — a custom engine whose native language
    *is* Plug.
 4. `plug-cli` extracts the console launcher out of `plug-language`.

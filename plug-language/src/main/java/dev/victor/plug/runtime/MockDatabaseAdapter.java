@@ -290,7 +290,7 @@ public class MockDatabaseAdapter implements DatabaseAdapter {
         for (Condition condition :
                 query.getConditions()) {
 
-            validateResolvedCondition(
+            QueryValidation.validateResolvedCondition(
                     condition,
                     schemas,
                     baseCollection
@@ -299,7 +299,7 @@ public class MockDatabaseAdapter implements DatabaseAdapter {
 
         if (query.getExpression() != null) {
 
-            validateResolvedExpression(
+            QueryValidation.validateResolvedExpression(
                     query.getExpression(),
                     schemas,
                     baseCollection
@@ -314,7 +314,7 @@ public class MockDatabaseAdapter implements DatabaseAdapter {
 
         if (sort != null) {
 
-            sortField = resolveField(
+            sortField = QueryValidation.resolveField(
                     sort.getField(),
                     schemas,
                     baseCollection
@@ -542,260 +542,7 @@ public class MockDatabaseAdapter implements DatabaseAdapter {
             Map<String, Map<String, Class<?>>> schemas
     ) {
 
-        validateJoinSide(
-                join.getLeftField(),
-                schemas
-        );
-
-        validateJoinSide(
-                join.getRightField(),
-                schemas
-        );
-
-        String leftCollection =
-                collectionOf(join.getLeftField());
-
-        String rightCollection =
-                collectionOf(join.getRightField());
-
-        boolean leftIsJoined =
-                leftCollection.equals(join.getCollection());
-
-        boolean rightIsJoined =
-                rightCollection.equals(join.getCollection());
-
-        if (leftIsJoined == rightIsJoined) {
-
-            throw new PlugException(
-                    "join() key must reference the joined "
-                            + "collection on one side and an "
-                            + "existing collection on the other: "
-                            + "(" + join.getLeftField()
-                            + ", EQ, "
-                            + join.getRightField() + ")"
-            );
-        }
-
-        Class<?> leftType = schemas
-                .get(leftCollection)
-                .get(bareName(join.getLeftField()));
-
-        Class<?> rightType = schemas
-                .get(rightCollection)
-                .get(bareName(join.getRightField()));
-
-        if (!leftType.equals(rightType)) {
-
-            throw new PlugException(
-                    "Type mismatch in join key: "
-                            + join.getLeftField() + " ("
-                            + leftType.getSimpleName() + ") vs "
-                            + join.getRightField() + " ("
-                            + rightType.getSimpleName() + ")"
-            );
-        }
-    }
-
-    private void validateJoinSide(
-            String field,
-            Map<String, Map<String, Class<?>>> schemas
-    ) {
-
-        String collection = collectionOf(field);
-
-        Map<String, Class<?>> schema =
-                schemas.get(collection);
-
-        if (schema == null) {
-            throw new PlugException(
-                    "Unknown collection in join key: "
-                            + collection
-            );
-        }
-
-        if (!schema.containsKey(bareName(field))) {
-
-            throw new PlugException(
-                    "Unknown field: " + field
-            );
-        }
-    }
-
-    /*
-     * Field resolution inside joined reads.
-     *
-     * "orders.total" is exact: the collection must be part
-     * of the join and must define the field.
-     *
-     * A bare "total" resolves base-first: the base
-     * collection wins immediately, otherwise the joins are
-     * searched in chain order and a name found in more
-     * than one joined collection is ambiguous.
-     */
-    private String resolveField(
-            String field,
-            Map<String, Map<String, Class<?>>> schemas,
-            String baseCollection
-    ) {
-
-        if (field.contains(".")) {
-
-            String collection = collectionOf(field);
-
-            Map<String, Class<?>> schema =
-                    schemas.get(collection);
-
-            if (schema == null) {
-
-                throw new PlugException(
-                        "Unknown collection in field: "
-                                + field
-                );
-            }
-
-            if (!schema.containsKey(bareName(field))) {
-
-                throw new PlugException(
-                        "Unknown field: " + field
-                );
-            }
-
-            return field;
-        }
-
-        Map<String, Class<?>> baseSchema =
-                schemas.get(baseCollection);
-
-        if (baseSchema.containsKey(field)) {
-            return baseCollection + "." + field;
-        }
-
-        List<String> matches = new ArrayList<>();
-
-        for (Map.Entry<String, Map<String, Class<?>>> entry :
-                schemas.entrySet()) {
-
-            if (entry.getKey().equals(baseCollection)) {
-                continue;
-            }
-
-            if (entry.getValue().containsKey(field)) {
-                matches.add(
-                        entry.getKey() + "." + field
-                );
-            }
-        }
-
-        if (matches.isEmpty()) {
-
-            throw new PlugException(
-                    "Unknown field: " + field
-            );
-        }
-
-        if (matches.size() > 1) {
-
-            throw new PlugException(
-                    "Ambiguous field: " + field + " ("
-                            + String.join(
-                            ", ",
-                            matches
-                    ) + ")"
-            );
-        }
-
-        return matches.get(0);
-    }
-
-    private void validateResolvedCondition(
-            Condition condition,
-            Map<String, Map<String, Class<?>>> schemas,
-            String baseCollection
-    ) {
-
-        String resolved = resolveField(
-                condition.getField(),
-                schemas,
-                baseCollection
-        );
-
-        /*
-         * validateCondition matches bare schema keys, so the
-         * resolved field is stripped back to its bare name
-         * and checked against the schema of the collection
-         * it resolved to.
-         */
-        validateCondition(
-                new Condition(
-                        bareName(resolved),
-                        condition.getOperator(),
-                        condition.getValue(),
-                        condition.getLogicalOperator()
-                ),
-                schemas.get(collectionOf(resolved))
-        );
-    }
-
-    private void validateResolvedExpression(
-            ConditionExpression expression,
-            Map<String, Map<String, Class<?>>> schemas,
-            String baseCollection
-    ) {
-
-        if (expression instanceof ComparisonExpression) {
-
-            ComparisonExpression comparison =
-                    (ComparisonExpression) expression;
-
-            validateResolvedCondition(
-                    new Condition(
-                            comparison.getField(),
-                            comparison.getOperator(),
-                            comparison.getValue(),
-                            Condition.LogicalOperator.AND
-                    ),
-                    schemas,
-                    baseCollection
-            );
-
-            return;
-        }
-
-        if (expression instanceof LogicalExpression) {
-
-            LogicalExpression logical =
-                    (LogicalExpression) expression;
-
-            validateResolvedExpression(
-                    logical.getLeft(),
-                    schemas,
-                    baseCollection
-            );
-
-            validateResolvedExpression(
-                    logical.getRight(),
-                    schemas,
-                    baseCollection
-            );
-
-            return;
-        }
-
-        if (expression instanceof NotExpression) {
-
-            validateResolvedExpression(
-                    ((NotExpression) expression)
-                            .getExpression(),
-                    schemas,
-                    baseCollection
-            );
-
-            return;
-        }
-
-        throw new PlugException(
-                "Unknown condition expression."
-        );
+        QueryValidation.validateJoin(join, schemas);
     }
 
     private String collectionOf(String qualified) {
@@ -823,28 +570,7 @@ public class MockDatabaseAdapter implements DatabaseAdapter {
             Map<String, Class<?>> schema
     ) {
 
-        for (Condition condition :
-                query.getConditions()) {
-
-            validateCondition(
-                    condition,
-                    schema
-            );
-        }
-
-        /*
-         * A grouped/logical where() stores its conditions
-         * inside the expression tree, not in the flat
-         * conditions list. Validate every comparison seen
-         * while walking that tree.
-         */
-        if (query.getExpression() != null) {
-
-            validateExpression(
-                    query.getExpression(),
-                    schema
-            );
-        }
+        QueryValidation.validateWhere(query, schema);
     }
 
     private QueryResult insert(ExecutionPlan plan) {
@@ -988,51 +714,12 @@ public class MockDatabaseAdapter implements DatabaseAdapter {
         );
     }
 
-    /*
-     * Insert/update payloads follow the same schema rules
-     * as conditions: every field must exist and match by
-     * type; null is accepted for any field.
-     */
     private void validateWriteFields(
             Map<String, Object> data,
             Map<String, Class<?>> schema
     ) {
 
-        for (Map.Entry<String, Object> entry :
-                data.entrySet()) {
-
-            String field = entry.getKey();
-
-            Object value = entry.getValue();
-
-            if (!schema.containsKey(field)) {
-                throw new PlugException(
-                        "Unknown field: " + field
-                );
-            }
-
-            if (value == null) {
-                continue;
-            }
-
-            Class<?> expectedType =
-                    schema.get(field);
-
-            if (!expectedType.isInstance(value)) {
-
-                throw new PlugException(
-                        "Type mismatch for field '"
-                                + field +
-                                "'. Expected " +
-                                expectedType
-                                        .getSimpleName() +
-                                " but got " +
-                                value
-                                        .getClass()
-                                        .getSimpleName()
-                );
-            }
-        }
+        QueryValidation.validateWriteFields(data, schema);
     }
 
     /*
@@ -1048,41 +735,18 @@ public class MockDatabaseAdapter implements DatabaseAdapter {
             List<Map<String, Object>> records
     ) {
 
+        QueryValidation.validateAggregate(
+                aggregate,
+                field,
+                schema
+        );
+
         if (aggregate == ExecutionPlan.Aggregate.COUNT) {
             return records.size();
         }
 
-        if (!schema.containsKey(field)) {
-
-            throw new PlugException(
-                    "Unknown field: " + field
-            );
-        }
-
         Class<?> fieldType =
                 schema.get(field);
-
-        if (aggregate == ExecutionPlan.Aggregate.SUM
-                || aggregate == ExecutionPlan.Aggregate.AVG) {
-
-            if (!Number.class.isAssignableFrom(fieldType)) {
-
-                throw new PlugException(
-                        aggregate
-                                + " requires a numeric field. Field '"
-                                + field
-                                + "' is not numeric."
-                );
-            }
-        }
-
-        if (!Comparable.class.isAssignableFrom(fieldType)) {
-
-            throw new PlugException(
-                    "Field '" + field
-                            + "' cannot be aggregated."
-            );
-        }
 
         boolean numeric =
                 aggregate == ExecutionPlan.Aggregate.SUM
@@ -1204,193 +868,6 @@ public class MockDatabaseAdapter implements DatabaseAdapter {
         }
 
         return schema;
-    }
-
-    private void validateCondition(
-            Condition condition,
-            Map<String, Class<?>> schema
-    ) {
-
-        String field = condition.getField();
-
-        if (!schema.containsKey(field)) {
-            throw new PlugException(
-                    "Unknown field: " + field
-            );
-        }
-
-        Class<?> expectedType =
-                schema.get(field);
-
-        Value value =
-                condition.getValue();
-
-        if (condition.getOperator().equals("BETWEEN")) {
-
-            if (value.getType()
-                    != Value.Type.LIST) {
-
-                throw new PlugException(
-                        "BETWEEN requires a list of two values."
-                );
-            }
-
-            @SuppressWarnings("unchecked")
-            List<Value> range =
-                    (List<Value>) value.getValue();
-
-            if (range.size() != 2) {
-
-                throw new PlugException(
-                        "BETWEEN requires exactly two values."
-                );
-            }
-
-            for (Value bound : range) {
-
-                Object boundValue =
-                        bound.getValue();
-
-                if (boundValue != null
-                        && !expectedType.isInstance(
-                        boundValue
-                )) {
-
-                    throw new PlugException(
-                            "Type mismatch for field '"
-                                    + field +
-                                    "'. Expected " +
-                                    expectedType
-                                            .getSimpleName() +
-                                    " but got " +
-                                    boundValue
-                                            .getClass()
-                                            .getSimpleName()
-                    );
-                }
-            }
-
-            return;
-        }
-
-        if (condition.getOperator().equals("IN")) {
-
-            if (value.getType()
-                    != Value.Type.LIST) {
-
-                throw new PlugException(
-                        "IN requires a list of values."
-                );
-            }
-
-            @SuppressWarnings("unchecked")
-            List<Value> values =
-                    (List<Value>) value.getValue();
-
-            for (Value item : values) {
-
-                Object itemValue =
-                        item.getValue();
-
-                if (itemValue != null
-                        && !expectedType.isInstance(
-                        itemValue
-                )) {
-
-                    throw new PlugException(
-                            "Type mismatch for field '"
-                                    + field +
-                                    "'. Expected " +
-                                    expectedType
-                                            .getSimpleName() +
-                                    " but got " +
-                                    itemValue
-                                            .getClass()
-                                            .getSimpleName()
-                    );
-                }
-            }
-
-            return;
-        }
-
-        Object expectedValue =
-                value.getValue();
-
-        if (expectedValue != null
-                && !expectedType.isInstance(
-                expectedValue
-        )) {
-
-            throw new PlugException(
-                    "Type mismatch for field '"
-                            + field +
-                            "'. Expected " +
-                            expectedType
-                                    .getSimpleName() +
-                            " but got " +
-                            expectedValue
-                                    .getClass()
-                                    .getSimpleName()
-            );
-        }
-    }
-
-    private void validateExpression(
-            ConditionExpression expression,
-            Map<String, Class<?>> schema
-    ) {
-
-        if (expression instanceof ComparisonExpression) {
-
-            ComparisonExpression comparison =
-                    (ComparisonExpression) expression;
-
-            validateCondition(
-                    new Condition(
-                            comparison.getField(),
-                            comparison.getOperator(),
-                            comparison.getValue(),
-                            Condition.LogicalOperator.AND
-                    ),
-                    schema
-            );
-
-            return;
-        }
-
-        if (expression instanceof LogicalExpression) {
-
-            LogicalExpression logical =
-                    (LogicalExpression) expression;
-
-            validateExpression(
-                    logical.getLeft(),
-                    schema
-            );
-
-            validateExpression(
-                    logical.getRight(),
-                    schema
-            );
-
-            return;
-        }
-
-        if (expression instanceof NotExpression) {
-
-            validateExpression(
-                    ((NotExpression) expression)
-                            .getExpression(),
-                    schema
-            );
-
-            return;
-        }
-
-        throw new PlugException(
-                "Unknown condition expression."
-        );
     }
 
     private boolean compare(

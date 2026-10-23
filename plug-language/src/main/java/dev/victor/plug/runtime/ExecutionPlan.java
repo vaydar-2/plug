@@ -1,6 +1,7 @@
 package dev.victor.plug.runtime;
 
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /*
@@ -91,11 +92,27 @@ public class ExecutionPlan {
         this.query = query;
         this.collection = collection;
         this.operation = operation;
-        this.data = data;
+
+        /*
+         * Write payloads are copied so the plan's data is
+         * frozen at planning time; a null map reads as an
+         * empty one (reads pass no data).
+         */
+        this.data = data == null
+                ? Collections.<String, Object>emptyMap()
+                : new LinkedHashMap<>(data);
+
         this.aggregate = aggregate;
         this.aggregateField = aggregateField;
     }
 
+    /*
+     * The query is shared by reference: it is fully built
+     * before planning and never mutated afterwards, so both
+     * planner and adapter see the same immutable-in-practice
+     * object. Its internal lists are already protected
+     * inside Query. The write data map is exposed read-only.
+     */
     public Query getQuery() {
         return query;
     }
@@ -109,7 +126,7 @@ public class ExecutionPlan {
     }
 
     public Map<String, Object> getData() {
-        return data;
+        return Collections.unmodifiableMap(data);
     }
 
     public Aggregate getAggregate() {

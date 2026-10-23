@@ -1,0 +1,53 @@
+# PostgreSQL smoke script: the same statements all-features.plug runs on
+# the mock, pointed at a real server. Tables `users`, `orders` and
+# `inventory` with the mock's schemas must exist in the database.
+# Run with: java -cp target/classes dev.victor.plug.Main examples/postgres.plug
+
+# ----------------------------------------------------------------- connect
+plug.connect(driver: "postgres", host: "localhost", port: 5432, database: "plugdb", username: "victor", password: "secret");
+
+plug.use("users");
+
+# ------------------------------------------------ reads: expression where
+plug.get(name)
+    .where((country, EQ, "Kenya") or ((country, EQ, "Nigeria")));
+
+plug.get(name, age)
+    .where(NOT ((country, EQ, "Kenya")) AND ((age, GT, 20)));
+
+# -------------------------------------------------------- operator samples
+plug.get(name).where((country, IN, ["Kenya", "Nigeria"]));
+plug.get(name).where((email, LIKE, "%@outlook.com"));
+plug.get(name).where((age, BETWEEN, [18, 25]));
+plug.get(name).where((email, IS NOT NULL));
+
+# ---------------------------------------------------------------- sort + limit
+plug.get(name, balance)
+    .where((country, EQ, "Ghana"))
+    .sort(balance, DESC)
+    .limit(3);
+
+# -------------------------------------------------------------------- joins
+plug.get(name, orders.total)
+    .join(orders, on: (users.id, EQ, orders.user_id))
+    .where((country, EQ, "Ghana"))
+    .sort(orders.total, DESC)
+    .limit(3);
+
+# -------------------------------------------------------------- aggregates
+plug.get().where((country, EQ, "Ghana")).count();
+plug.get().sum(balance);
+plug.get().min(name);
+
+# ------------------------------------------------------------------ writes
+# No id given -> left to a serial/identity column's server-side default.
+plug.insert(name: "Kwame", age: 22, email: "kwame@gmail.com", balance: 500, active: true, country: "Ghana", role: "student");
+plug.get(id).where((name, EQ, "Kwame"));
+
+plug.update(balance: 777).where((name, EQ, "Kwame"));
+plug.get(name, balance).where((name, EQ, "Kwame"));
+
+# Clean up so repeated runs stay idempotent:
+plug.delete().where((name, EQ, "Kwame"));
+
+plug.close();

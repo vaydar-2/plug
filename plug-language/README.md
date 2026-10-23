@@ -16,9 +16,9 @@ plug.get(name, country)
 Plug is pure Java (JDK 27+) with zero runtime dependencies. A console
 launcher reads a `.plug` file, and a pluggable adapter layer executes the
 compiled query plan. The bundled `mock` adapter runs against in-memory
-sample data; new backends register themselves by name — the planned order
-is PostgreSQL, MongoDB, then PlugDB (a custom database using Plug as its
-native query language).
+sample data; backends register themselves by name — the PostgreSQL adapter
+is already included (`driver: "postgres"`), with MongoDB and PlugDB (a
+custom database using Plug as its native query language) next in line.
 
 ## Running
 
@@ -73,7 +73,7 @@ plug.connect(driver: "mock", host: "localhost", port: 5432, database: "mydb", us
 ```
 
 An unknown driver fails with the list of registered drivers, e.g.
-`Unknown driver: postgres. Available drivers: mock`.
+`Unknown driver: mongo. Available drivers: mock, postgres, postgresql`.
 
 ### plug.use(...) — select a collection
 
@@ -368,6 +368,108 @@ All failures surface as `PlugException`:
   collection schema — a string compared to (or written into) an integer
   field fails type checking.
 
+## PostgreSQL adapter
+
+The first real backend. From the script's point of view nothing changes —
+only `connect` gains a driver argument:
+
+```plug
+plug.connect(driver: "postgres", host: "localhost", port: 5432,
+             database: "mydb", username: "victor", password: "secret");
+plug.use("users");
+
+plug.get(name, balance)
+    .where((country, EQ, "Ghana"))
+    .sort(balance, DESC)
+    .limit(3);
+```
+
+`driver: "postgresql"` is accepted as a spelled-out alias.
+
+Every statement — reads, joins, aggregates, writes — becomes a single
+parameterized SQL statement executed through JDBC (the PostgreSQL driver
+is the module's one transport dependency). The same script that runs on
+the mock runs unchanged against PostgreSQL, and vice versa.
+
+### Division of responsibility
+
+The adapter does not re-implement the query language. Everything
+query-shaped — field existence, type checking, join structure, and the
+left-to-right condition folding — lives in the shared query model
+(`QueryValidation` and `PostgresQueryCompiler`), next to the same logic
+the mock uses. `PostgresDatabaseAdapter` itself owns only the JDBC
+mechanics: opening the connection, introspecting schemas, binding
+parameters, and mapping result rows back into Plug's Java types. The
+core runtime (`Runtime`, `Query`, `ExecutionPlan`) never mentions
+PostgreSQL — the adapter plugs in through the same three methods the
+mock implements.
+
+### Compilation to SQL
+
+- A read compiles to one `SELECT` — projection, `JOIN ... ON`, `WHERE`,
+  `ORDER BY`, and `LIMIT` in a single statement; joins become explicit
+  `INNER JOIN`s keyed exactly as the `.join(on:)` tuple says.
+- Aggregates map to `COUNT(*)`, `SUM(col)`, `AVG(col)`, `MIN(col)`,
+  `MAX(col)`; a SQL `NULL` aggregate over an empty match set comes back
+  as Plug's `null`.
+- `insert` compiles to `INSERT INTO t (cols) VALUES (?)`: an omitted
+  `id` is left out of the column list entirely, so a `serial`/
+  identity-backed column fills it server-side; an explicit `id:` is
+  duplicate-checked first and produces `Duplicate id: N` (also on a
+  unique-violation race). `update` and `delete` keep the same
+  require-`where()` rule the mock enforces, so unscoped writes stay
+  impossible on a real server.
+- Operator mapping: `EQ`/`NE` → `=`/`<>`, `GT`/`GTE`/`LT`/`LTE` →
+  `>`/`>=`/`<`/`<=`, `IN` → `= ANY(?)`, `CONTAINS` → a `LIKE
+  '%value%'` with `%`/`_`/`\` escaped, `BETWEEN` → `BETWEEN ? AND ?`,
+  `LIKE` → `LIKE`, and `IS NULL`/`IS NOT NULL` map directly. `AND`,
+  `OR`, and `NOT` compile with explicit parentheses so the folded left-
+  to-right structure cannot be re-grouped by SQL's own precedence.
+- All condition and payload values are bound as `?` parameters — script
+  values are never interpolated into SQL text. Only identifiers reach
+  the SQL string, and each is validated: a collection name must match
+  `[a-z_][a-z0-9_]*` (PostgreSQL's unquoted lowercase convention), and
+  column names are quoted only after being resolved against the
+  introspected schema, so script input never becomes SQL syntax.
+
+### Schema and types
+
+On `plug.use(collection)` the adapter reads the table's columns from
+`information_schema` and caches them; an unknown collection, unknown
+field, or type mismatch fails exactly as it does on the mock. The tables
+must exist beforehand — Plug queries, it does not migrate. Column types
+map back into Plug's value types:
+
+| PostgreSQL type                                | Plug type  |
+|------------------------------------------------|------------|
+| `smallint`, `integer`                          | number (integer) |
+| `bigint`                                       | number (integer) |
+| `real`, `double precision`, `numeric`, `decimal` | number (decimal) |
+| `boolean`                                      | boolean    |
+| `varchar`, `text`, `character`                 | string     |
+
+Any other column type is rejected at `use` time. `sum` on an integer
+column yields an integer, on a decimal column a decimal, mirroring the
+mock's aggregate typing.
+
+### Integration tests
+
+Compiler behavior is covered by ordinary unit tests (`PostgresQueryCompilerTest`
+asserts the generated SQL for operators, folding, joins, aggregates, and
+writes — no server needed). Three end-to-end tests in
+`PostgresAdapterIntegrationTest` run against a real server and skip
+silently unless `PLUG_PG_HOST` is set (`PLUG_PG_PORT`, `PLUG_PG_DB`,
+`PLUG_PG_USER`, `PLUG_PG_PASSWORD` override the defaults — the database
+and its `users`, `orders`, and `inventory` tables with the mock's schemas
+must exist):
+
+```bash
+PLUG_PG_HOST=localhost PLUG_PG_DB=plugdb \
+PLUG_PG_USER=victor PLUG_PG_PASSWORD=secret mvn test
+```
+
+`examples/postgres.plug` is the adapter's smoke script.
+
 ## Architecture
 
     .plug file → Lexer (+ line numbers) → Parser → AST
@@ -380,10 +482,14 @@ All failures surface as `PlugException`:
 
 - `DatabaseAdapter` is the backend contract: `connect`, `execute(plan) →
   QueryResult`, `close`. Adapters return structured results and never print.
-- `DatabaseAdapterRegistry` maps driver names to adapter factories.
+- `DatabaseAdapterRegistry` maps driver names to adapter factories
+  (`mock`, `postgres`, `postgresql` today).
 - The mock adapter implements in-memory filtering, sorting, limiting,
   joins (nested-loop inner joins over its sample collections), and
   schema/type validation; it is the reference implementation for semantics.
+- The PostgreSQL adapter compiles plans to parameterized SQL through
+  `PostgresQueryCompiler`, shares all schema/type/join validation with
+  the mock via `QueryValidation`, and owns only the JDBC mechanics.
 
 ## Roadmap
 
@@ -391,6 +497,7 @@ All failures surface as `PlugException`:
    (count/sum/avg/min/max), insert/update/delete, the operator set
    (EQ, NE, GT, GTE, LT, LTE, IN, CONTAINS, BETWEEN, LIKE, IS NULL/
    IS NOT NULL), and joins (`.join(collection, on: ...)`) are done.
-2. Real adapters, in order: PostgreSQL, MongoDB.
+2. Real adapters: PostgreSQL is done (parameterized SQL over JDBC,
+   integration tests gated on `PLUG_PG_HOST`); MongoDB is next.
 3. PlugDB — a custom database using Plug as its query language.
 4. Adapters for more database categories.

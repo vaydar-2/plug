@@ -2,7 +2,7 @@ package dev.victor.plug.runtime;
 
 import dev.victor.plug.PlugException;
 
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Supplier;
 
@@ -13,11 +13,22 @@ import java.util.function.Supplier;
  */
 public class DatabaseAdapterRegistry {
 
+    /*
+     * Insertion order is kept so "Available drivers: ..."
+     * lists drivers deterministically.
+     */
     private static final Map<String, Supplier<DatabaseAdapter>> ADAPTERS =
-            new HashMap<>();
+            new LinkedHashMap<>();
 
     static {
         ADAPTERS.put("mock", MockDatabaseAdapter::new);
+
+        /*
+         * PostgreSQL backend; "postgresql" is accepted as
+         * the spelled-out alias of "postgres".
+         */
+        ADAPTERS.put("postgres", PostgresDatabaseAdapter::new);
+        ADAPTERS.put("postgresql", PostgresDatabaseAdapter::new);
     }
 
     private DatabaseAdapterRegistry() {

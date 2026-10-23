@@ -181,6 +181,43 @@ public class RuntimeTest {
         );
     }
 
+    /*
+     * A fully flat chain where/and/or folds strictly
+         * left-to-right: (role developer AND age>21) OR
+         * country Nigeria. Developers over 21 are Michael,
+         * Emma, Chris, Rachel and Andrew (5 rows); the OR
+         * branch adds Nigeria's Samuel, Olivia and Martha
+         * (non-developers), giving 8. An all-AND folding
+         * would give 5 instead.
+         */
+    @Test
+    public void flatChainEvaluatesLeftToRight() {
+
+        String leftToRight = runCaptured(
+                connectAndSelect
+                        + "plug.get(name).where((role, EQ, \"developer\"))"
+                        + ".and(age, GT, 21).or(country, EQ, \"Nigeria\");"
+        );
+
+        assertTrue(leftToRight.contains("Records found: 8"));
+
+        /*
+         * (Ghana OR age<21) AND role manager: only James
+         * (31, Ghana, manager) and Thomas (32, Ghana,
+         * manager) survive; naive OR-before-AND wiring
+         * would pull non-manager students onto the score.
+         */
+        String ordered = runCaptured(
+                connectAndSelect
+                        + "plug.get(name).where((country, EQ, \"Ghana\"))"
+                        + ".or(age, LT, 21).and(role, EQ, \"manager\");"
+        );
+
+        assertTrue(ordered.contains("Records found: 2"));
+        assertTrue(ordered.contains("{name=James}"));
+        assertTrue(ordered.contains("{name=Thomas}"));
+    }
+
     @Test
     public void nullComparison() {
 
@@ -317,6 +354,11 @@ public class RuntimeTest {
         );
     }
 
+    /*
+     * "postgres" is a real driver since the PostgreSQL
+     * adapter milestone; mongodb is the next planned one
+     * and still unregistered.
+     */
     @Test
     public void unknownDriverReportsAvailability() {
 
@@ -324,16 +366,16 @@ public class RuntimeTest {
                 assertThrows(
                         PlugException.class,
                         () -> runCaptured(
-                                "plug.connect(driver: \"postgres\", "
-                                        + "host: \"localhost\", port: 5432, "
+                                "plug.connect(driver: \"mongodb\", "
+                                        + "host: \"localhost\", port: 27017, "
                                         + "database: \"mydb\", username: \"victor\", "
                                         + "password: \"secret\");"
                         )
                 );
 
         assertEquals(
-                "Unknown driver: postgres. "
-                        + "Available drivers: mock",
+                "Unknown driver: mongodb. "
+                        + "Available drivers: mock, postgres, postgresql",
                 exception.getMessage()
         );
     }
@@ -718,6 +760,66 @@ public class RuntimeTest {
         );
 
         assertTrue(sumOutput.contains("SUM(balance) = null"));
+
+        /* AVG/MIN/MAX over nothing are null as well. */
+        String avgOutput = runCaptured(
+                connectAndSelect
+                        + "plug.get().where((age, LT, -1)).avg(balance);"
+        );
+
+        assertTrue(avgOutput.contains("AVG(balance) = null"));
+
+        String minOutput = runCaptured(
+                connectAndSelect
+                        + "plug.get().where((age, LT, -1)).min(balance);"
+        );
+
+        assertTrue(minOutput.contains("MIN(balance) = null"));
+
+        String maxOutput = runCaptured(
+                connectAndSelect
+                        + "plug.get().where((age, LT, -1)).max(balance);"
+        );
+
+        assertTrue(maxOutput.contains("MAX(balance) = null"));
+    }
+
+    /*
+     * Aggregate null-handling: nulls in the aggregated field
+     * are skipped, so AVG divides by the count of non-null
+     * values, not by the row count.
+     */
+    @Test
+    public void avgTreatsNullValuesAsAbsent() {
+
+        runCaptured(
+                connectAndSelect
+                        + "plug.update(balance: null).where((id, EQ, 1));"
+        );
+
+        String output = runCaptured(
+                connectAndSelect
+                        + "plug.get().avg(balance);"
+        );
+
+        /* 590700 - Victor's 25000 = 565700 over the 19 non-null rows. */
+        assertTrue(output.contains("AVG(balance) = " + 565700.0 / 19));
+    }
+
+    @Test
+    public void minSkipsNullValues() {
+
+        /*
+         * Alex's email is the only null one; SQL-style MIN
+         * ignores it and keeps the lexicographic minimum
+         * over the remaining players.
+         */
+        String output = runCaptured(
+                connectAndSelect
+                        + "plug.get().min(email);"
+        );
+
+        assertTrue(output.contains("MIN(email) = andrew@gmail.com"));
     }
 
     @Test

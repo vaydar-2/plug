@@ -6,6 +6,7 @@ import dev.victor.plug.ast.Value;
 import dev.victor.plug.ast.ConditionExpression;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class Query {
@@ -19,9 +20,18 @@ public class Query {
 
     private ConditionExpression expression;
 
+    /*
+     * The caller's list is copied so later external mutation
+     * cannot change an already built query. A null list is
+     * treated as an empty projection (aggregate chains use
+     * plug.get() with no fields).
+     */
     public Query(List<String> fields) {
 
-        this.fields = fields;
+        this.fields = fields == null
+                ? new ArrayList<>()
+                : new ArrayList<>(fields);
+
         this.conditions = new ArrayList<>();
         this.joins = new ArrayList<>();
     }
@@ -94,7 +104,7 @@ public class Query {
     }
 
     public List<Join> getJoins() {
-        return joins;
+        return Collections.unmodifiableList(joins);
     }
 
     public Query sort(
@@ -123,12 +133,16 @@ public class Query {
         return this;
     }
 
+    /*
+     * Read-only views: internal builders (where/and/or/join)
+     * mutate the lists directly; external callers cannot.
+     */
     public List<String> getFields() {
-        return fields;
+        return Collections.unmodifiableList(fields);
     }
 
     public List<Condition> getConditions() {
-        return conditions;
+        return Collections.unmodifiableList(conditions);
     }
 
     public Sort getSort() {
