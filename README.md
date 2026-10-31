@@ -118,6 +118,20 @@ PlugDB hosts the runtime itself as its query engine.
   the full language reference, and `examples/all-features.plug` — all three
   must stay green.
 
+## Command-line interface
+
+The console launcher graduated into a CLI inside `plug-language`
+(`dev.victor.plug.cli`): `plug run <file.plug>` executes a script,
+`plug check <file.plug>` validates it statically (lex + parse, no
+database interaction), plus `--version`/`--help` — with documented
+exit codes (0 success, 1 script/file failure, 2 usage error) and
+stdout/stderr separation. The legacy bare `plug <file.plug>`
+invocation via `dev.victor.plug.Main` still works unchanged. `mvn
+package` attaches a shaded runnable jar with the PostgreSQL JDBC
+driver bundled; jpackage commands for self-contained native
+distributions are documented in `plug-language/README.md` (the
+interactive REPL is explicitly deferred).
+
 ## Roadmap
 
 1. Joins in the language and the mock adapter — **done**: chained
@@ -131,6 +145,8 @@ PlugDB hosts the runtime itself as its query engine.
    identical contract.
 3. MongoDB adapter, then PlugDB — a custom engine whose native language
    *is* Plug.
-4. `plug-cli` extracts the console launcher out of `plug-language`.
+4. `plug-cli` extracts the console launcher out of `plug-language` —
+   the CLI commands themselves are done and live in
+   `dev.victor.plug.cli`; the module split is still open.
 5. `plug-studio` GUI and the public site/website once the language reaches wider
    usefulness.

@@ -44,6 +44,54 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
             </plugin>
+
+            <!--
+                Distribution packaging: a shaded, runnable jar
+                (plug-<version>-shaded.jar) with Main-Class =
+                dev.victor.plug.cli.CliMain, so
+                "java -jar plug-...-shaded.jar run s.plug"
+                works without a local classpath. The PostgreSQL
+                JDBC driver ships inside it automatically — it
+                is a compile-scope dependency of the postgres
+                adapter. The jar is attached as a separate
+                artifact; the plain jar keeps the original name
+                for mvn test consumers. Adapters self-register
+                statically (no META-INF/services), so no
+                service-resource transformer is needed.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <shadedArtifactAttached>true</shadedArtifactAttached>
+                            <shadedClassifierName>shaded</shadedClassifierName>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>dev.victor.plug.cli.CliMain</mainClass>
+                                </transformer>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>module-info.class</exclude>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 

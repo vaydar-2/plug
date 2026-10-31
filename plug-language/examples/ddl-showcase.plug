@@ -1,0 +1,86 @@
+# DDL showcase: the new schema features put to work.
+# Run with: java -cp target/classes dev.victor.plug.Main examples/ddl-showcase.plug
+# The same script runs unchanged against a real PostgreSQL server —
+# just switch the driver to "postgres" (create.database then runs on its
+# own administrative connection to the server's `postgres` database).
+
+# ------------------------------------------------------------------ connect
+plug.connect(driver: "mock", host: "localhost", port: 5432, database: "mydb", username: "victor", password: "secret");
+
+# --------------------------------------------------------- create a database
+# New in the DDL milestone — a scoped database of its own:
+plug.create.database("shop");
+
+
+# ------------------------------------------------------------ create tables
+# Every supported type and constraint in one definition:
+# - INT primary_key        -> server/mock-assigned id when omitted
+# - STRING required        -> insert must supply it
+# - DECIMAL default 9.99   -> omitted fields fall back to the default
+# - BOOL default true
+plug.create.table("products") {
+    id: INT primary_key,
+    name: STRING required,
+    category: STRING unique,
+    price: DECIMAL default 9.99,
+    in_stock: BOOL default true
+};
+
+
+# A second table joined against the first:
+plug.create.table("restocks") {
+    id: INT primary_key,
+    product_id: INT required,
+    units: INT default 10,
+    note: STRING default "routine"
+};
+
+
+# ------------------------------------------------- inserts that use defaults
+plug.use("products");
+
+# price and in_stock omitted -> 9.99 and true
+plug.insert(name: "Laptop", category: "electronics", price: 450.0);
+plug.insert(name: "Phone", category: "electronics", price: 250.5);
+
+# note omitted -> "routine"
+plug.insert(name: "Book", category: "media");
+plug.insert(name: "Desk lamp", category: "home", price: 19.95, in_stock: false);
+
+plug.get(id, name, price, in_stock)
+    .where((price, GTE, 10.0))
+    .sort(price, DESC);
+
+plug.get().count();
+
+plug.get().sum(price);
+plug.get().avg(price);
+
+# join the new tables: restocks reference products by id
+plug.use("restocks");
+
+plug.insert(product_id: 1, units: 5, note: "resupply");
+plug.insert(product_id: 2, units: 40);
+plug.insert(product_id: 3, units: 12, note: "urgent");
+
+plug.get(products.name, restocks.units, restocks.note)
+    .join(products, on: (restocks.product_id, EQ, products.id))
+    .where((restocks.units, GTE, 10))
+    .sort(restocks.units, DESC);
+
+plug.get().sum(units);
+
+# ---------------------------------------------------------- modify + clean up
+plug.use("products");
+
+plug.update(price: 199.99).where((name, EQ, "Phone"));
+plug.get(name, price).where((name, EQ, "Phone"));
+
+plug.delete().where((in_stock, EQ, false));
+plug.get().where((in_stock, EQ, false)).count();
+
+plug.use("restocks");
+plug.delete().where((note, EQ, "urgent"));
+plug.get().count();
+
+plug.close();

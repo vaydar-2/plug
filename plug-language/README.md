@@ -48,6 +48,86 @@ Records found: 9
 Errors go to stderr and the process exits with code 1. Parse and lexer
 errors include line numbers, e.g. `Error: line 3: Expected a value.`
 
+## Command-line interface
+
+The `plug` CLI wraps the same pipeline behind four commands:
+
+```bash
+# legacy entry point (unchanged):
+java -cp target/classes dev.victor.plug.Main examples/test.plug
+
+# with the CLI:
+java -cp target/classes dev.victor.plug.cli.CliMain run examples/test.plug
+```
+
+After packaging (below) the commands are simply
+`java -jar plug-<version>-shaded.jar run <file.plug>` — or `plug ...`
+once installed through jpackage.
+
+| Command                 | Behavior |
+|-------------------------|----------|
+| `plug run <file.plug>`   | Executes a script (same output as before) |
+| `plug check <file.plug>` | Static validation: lex + parse only; prints `ok: <file>` on success, never touches a database |
+| `plug --version`         | CLI and language versions |
+| `plug --help`            | Usage information |
+
+The CLI does argument dispatch, file reading, and exit codes only —
+script handling is delegated to the existing `Lexer`, `Parser`, and
+`Runtime`; no language behavior is re-implemented or shadowed. It is
+kept separate from the language parser (`dev.victor.plug.cli` vs.
+`lexer`/`parser`).
+
+Notes:
+
+- Paths may be relative or absolute and may contain spaces — quoted
+  paths work as-is, and unquoted multi-word arguments are rejoined
+  (`plug run my script.plug` also resolves).
+- Exit codes: `0` success, `1` file-not-found / parse / static /
+  runtime failure, `2` usage error (unknown command, missing
+  argument). Results go to stdout, errors to stderr.
+- `check` validates syntax and grammar only (including DDL
+  definitions); it does not open connections or resolve schema-backed
+  types, which only exist at execution time.
+- The interactive REPL is explicitly deferred; `plug repl` says so and
+  exits with a usage error.
+- `dev.victor.plug.Main` remains the entry point for manual classpath
+  runs and now delegates to the CLI, so the original bare
+  `plug <file.plug>` invocation keeps working.
+
+### Packaging and distribution
+
+`mvn package` attaches a shaded runnable jar with the PostgreSQL JDBC
+driver inside (adapters register statically, so no service-file
+merge is needed):
+
+```bash
+mvn package
+java -jar target/plug-1.0-SNAPSHOT-shaded.jar run examples/test.plug
+```
+
+For a self-contained executable that does not require Java, `jpackage`
+(JDK 27+, bundled with the JDK) produces a native launcher with a
+private bundled runtime from the same jar — no module path or
+`module-info` required:
+
+```bash
+# platform-native app image (exe/msi on Windows, deb on Linux, dmg on macOS):
+jpackage --name plug --input target \
+         --main-jar plug-1.0-SNAPSHOT-shaded.jar
+
+# explicit installer types:
+jpackage --name plug --type msi --input target --main-jar plug-1.0-SNAPSHOT-shaded.jar
+jpackage --name plug --type deb --input target --main-jar plug-1.0-SNAPSHOT-shaded.jar
+
+# a stripped runtime-only bundle, as an alternative:
+jlink --add-modules java.naming,java.sql,java.desktop \
+      --output plug-runtime
+```
+
+Platform-specific installers are deliberately deferred until the CLI
+stabilizes; the shaded jar plus `jpackage` commands above are the
+distribution story for now.
+
 ## Language reference
 
 ### Statements
