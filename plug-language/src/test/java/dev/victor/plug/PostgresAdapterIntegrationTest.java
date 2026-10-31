@@ -2,6 +2,8 @@ package dev.victor.plug;
 
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /*
@@ -125,6 +127,127 @@ public class PostgresAdapterIntegrationTest {
         if (!output.contains("Records found: ")) {
             throw new AssertionError(
                     "unexpected output: " + output
+            );
+        }
+    }
+
+    /*
+     * Create-table round trip: admin-cleanup before and after,
+     * then lex/parse/validate/plan/compile against the live
+     * server, followed by an insert that relies on the
+     * column defaults and a read-back verifying them.
+     */
+    @Test
+    public void createTableInsertAndReadEndToEnd() {
+
+        withServer();
+
+        dropTable("plug_ddl_items");
+
+        try {
+
+            String output = runCaptured(
+                    connectScript()
+                            + "plug.create.table(\"plug_ddl_items\") {\n"
+                            + "    id: INT primary_key,\n"
+                            + "    name: STRING required,\n"
+                            + "    price: DECIMAL default 9.99,\n"
+                            + "    active: BOOL default true\n"
+                            + "};\n"
+                            + "plug.use(\"plug_ddl_items\");\n"
+                            + "plug.insert(name: \"Book\");\n"
+                            + "plug.get(id, name, price, active);"
+            );
+
+            assumeTrue(!output.contains("Cannot connect"),
+                    "Server unreachable; skipping");
+
+            assertTrue(output.contains(
+                    "Table created: plug_ddl_items"));
+
+            assertTrue(output.contains(
+                    "Records inserted: 1"));
+
+            assertTrue(output.contains("price=9.99"));
+
+            assertTrue(output.contains("active=true"));
+
+        } finally {
+
+            dropTable("plug_ddl_items");
+        }
+    }
+
+    /*
+     * create.database: runs on its own administrative
+     * connection inside the adapter; cleanup drops the
+     * database afterwards so reruns stay idempotent.
+     */
+    @Test
+    public void createDatabaseEndToEnd() {
+
+        withServer();
+
+        dropDatabase("plug_ddl_db");
+
+        try {
+
+            String output = runCaptured(
+                    connectScript()
+                            + "plug.create.database(\"plug_ddl_db\");"
+            );
+
+            assumeTrue(!output.contains("Cannot connect"),
+                    "Server unreachable; skipping");
+
+            assertTrue(output.contains(
+                    "Database created: plug_ddl_db"));
+
+        } finally {
+
+            dropDatabase("plug_ddl_db");
+        }
+    }
+
+    private static void dropTable(String table) {
+
+        runAdminStatement(
+                "DROP TABLE IF EXISTS " + table
+        );
+    }
+
+    private static void dropDatabase(String database) {
+
+        runAdminStatement(
+                "DROP DATABASE IF EXISTS " + database
+        );
+    }
+
+    private static void runAdminStatement(String sql) {
+
+        try (java.sql.Connection connection =
+                     java.sql.DriverManager.getConnection(
+                             "jdbc:postgresql://"
+                                     + host()
+                                     + ":"
+                                     + port()
+                                     + "/postgres",
+                             username(),
+                             password()
+                     );
+             java.sql.Statement statement =
+                     connection.createStatement()) {
+
+            statement.execute(sql);
+
+        } catch (java.sql.SQLException e) {
+
+            if ("3D000".equals(e.getSQLState())) {
+                return; // database dropped already
+            }
+
+            throw new AssertionError(
+                    "cleanup failed: " + e.getMessage(), e
             );
         }
     }

@@ -9,6 +9,13 @@ public class Call {
     private final List<Argument> arguments;
     private final ConditionExpression expression;
 
+    /*
+     * DDL calls (plug.create.table/create.database) carry a
+     * typed definition instead of condition expressions;
+     * every non-DDL call leaves this null.
+     */
+    private final TableDefinition tableDefinition;
+
     public Call(
             String object,
             String method,
@@ -18,6 +25,7 @@ public class Call {
         this.method = method;
         this.arguments = arguments;
         this.expression = null;
+        this.tableDefinition = null;
     }
 
     public Call(
@@ -29,6 +37,24 @@ public class Call {
         this.method = method;
         this.arguments = null;
         this.expression = expression;
+        this.tableDefinition = null;
+    }
+
+    public Call(
+            String object,
+            String method,
+            List<Argument> arguments,
+            TableDefinition tableDefinition
+    ) {
+        this.object = object;
+        this.method = method;
+        this.arguments = arguments;
+        this.expression = null;
+        this.tableDefinition = tableDefinition;
+    }
+
+    public TableDefinition getTableDefinition() {
+        return tableDefinition;
     }
 
     public String getObject() {

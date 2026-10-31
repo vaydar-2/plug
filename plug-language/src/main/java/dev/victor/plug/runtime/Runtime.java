@@ -6,6 +6,7 @@ import dev.victor.plug.ast.Argument;
 import dev.victor.plug.ast.Call;
 import dev.victor.plug.ast.Program;
 import dev.victor.plug.ast.Statement;
+import dev.victor.plug.ast.TableDefinition;
 import dev.victor.plug.ast.Value;
 
 import java.util.ArrayList;
@@ -76,6 +77,22 @@ public class Runtime {
                     && call.getMethod().equals("close")) {
 
                 connectionManager.close();
+
+                continue;
+            }
+
+            if (call.getObject().equals("plug.create")
+                    && call.getMethod().equals("table")) {
+
+                createTable(call);
+
+                continue;
+            }
+
+            if (call.getObject().equals("plug.create")
+                    && call.getMethod().equals("database")) {
+
+                createDatabase(call);
 
                 continue;
             }
@@ -488,6 +505,93 @@ public class Runtime {
             displayQueryResult(
                     result,
                     ExecutionPlan.Operation.READ
+            );
+        }
+    }
+
+    /*
+     * DDL rides the same connection context as CRUD, but
+     * needs no collection: a table can be created before any
+     * use() call. Validation and planning happen once here;
+     * adapters only compile and run the definition.
+     */
+    private void createTable(Call call) {
+
+        requireConnectionOnly();
+
+        TableDefinition definition = call.getTableDefinition();
+
+        if (definition == null) {
+
+            throw new PlugException(
+                    "plug.create.table requires a braced block "
+                            + "of column definitions."
+            );
+        }
+
+        SchemaValidation.validate(definition);
+
+        QueryPlanner planner = new QueryPlanner();
+
+        SchemaPlan plan = planner.planSchema(
+                SchemaPlan.createTable(definition)
+        );
+
+        new ExecutionEngine().executeSchema(
+                plan,
+                connectionManager.getContext()
+        );
+
+        System.out.println(
+                "Table created: " + definition.getName()
+        );
+    }
+
+    private void createDatabase(Call call) {
+
+        requireConnectionOnly();
+
+        if (call.getArguments().size() != 1
+                || call.getArguments().get(0).getName() != null
+                || call.getArguments().get(0).getValue() == null
+                || call.getArguments().get(0).getValue().getType()
+                != Value.Type.STRING) {
+
+            throw new PlugException(
+                    "plug.create.database requires a database "
+                            + "name, e.g. plug.create.database(\"shop\")."
+            );
+        }
+
+        String name = (String) call.getArguments()
+                .get(0)
+                .getValue()
+                .getValue();
+
+        SchemaValidation.validateDatabaseName(name);
+
+        QueryPlanner planner = new QueryPlanner();
+
+        SchemaPlan plan = planner.planSchema(
+                SchemaPlan.createDatabase(name)
+        );
+
+        new ExecutionEngine().executeSchema(
+                plan,
+                connectionManager.getContext()
+        );
+
+        System.out.println(
+                "Database created: " + name
+        );
+    }
+
+    private void requireConnectionOnly() {
+
+        if (connectionManager.getContext() == null) {
+
+            throw new PlugException(
+                    "No database connection. Use plug.connect() first."
             );
         }
     }

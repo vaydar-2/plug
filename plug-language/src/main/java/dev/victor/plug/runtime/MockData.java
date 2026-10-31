@@ -13,6 +13,14 @@ public class MockData {
     public static final Map<String, Map<String, Class<?>>> SCHEMAS =
             new HashMap<>();
 
+    /*
+     * Column defaults registered by create.table() per
+     * collection, applied on insert when a field is omitted —
+     * mirroring what a real server does with DEFAULT clauses.
+     */
+    public static final Map<String, Map<String, Object>> DEFAULTS =
+            new HashMap<>();
+
     static {
 
         List<Map<String, Object>> users = new ArrayList<>();

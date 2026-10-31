@@ -57,10 +57,11 @@ bundled in-memory `mock` adapter. Status of the language itself:
 | **Joins**: `.join(collection, on: (left, EQ, right))`, inner-join semantics, dotted `collection.field` names, base-first bare resolution | ✅ done |
 | **PostgreSQL adapter** (the first real backend) | ✅ done |
 | **PostgreSQL adapter** selections: `driver: "postgres"` / `"postgresql"` alias, schema introspection from `information_schema`, parameterized SQL, gated integration tests | ✅ done |
+| **DDL**: `plug.create.table(...) { ... }` and `plug.create.database(...)` on both adapters | ✅ done |
 | MongoDB adapter, PlugDB, other backends | ⬜ next |
 
-Test suite: **132 tests, all green** (JUnit 5, run through the console
-standalone launcher; the 3 PostgreSQL integration tests skip silently
+Test suite: **167 tests, all green** (JUnit 5, run through the console
+standalone launcher; the 5 PostgreSQL integration tests skip silently
 unless `PLUG_PG_HOST` points at a reachable server).
 
 ### Running the language

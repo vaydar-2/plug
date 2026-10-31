@@ -2,6 +2,7 @@ package dev.victor.plug.runtime;
 
 import dev.victor.plug.PlugException;
 
+import dev.victor.plug.ast.TableDefinition;
 import dev.victor.plug.ast.Value;
 import dev.victor.plug.ast.ComparisonExpression;
 import dev.victor.plug.ast.ConditionExpression;
@@ -60,6 +61,146 @@ public class MockDatabaseAdapter implements DatabaseAdapter {
             case READ:
             default:
                 return read(plan);
+        }
+    }
+
+    /*
+     * Schema operations describe the same in-memory stores
+     * the CRUD paths read. Creating a table registers an
+     * empty record list plus a class-mapped schema, so
+     * insert/get/update/delete/filtering immediately work on
+     * it exactly as on the seeded collections. Creating a
+     * database has no state to add in the mock's single
+     * in-memory world, so it validates the name and succeeds.
+     */
+    @Override
+    public QueryResult executeSchema(SchemaPlan plan) {
+
+        requireSupported(plan);
+
+        switch (plan.getOperation()) {
+
+            case CREATE_TABLE:
+                return createTable(plan.getTable());
+
+            case CREATE_DATABASE:
+                /* Validated by SchemaValidation in Runtime. */
+                return new QueryResult(
+                        0,
+                        new ArrayList<>()
+                );
+
+            default:
+                throw new PlugException(
+                        "Unsupported schema operation: "
+                                + plan.getOperation()
+                );
+        }
+    }
+
+    private void requireSupported(SchemaPlan plan) {
+
+        if (plan == null
+                || plan.getOperation() == null) {
+
+            throw new PlugException(
+                    "Schema operation is required."
+            );
+        }
+    }
+
+    private QueryResult createTable(
+            TableDefinition definition
+    ) {
+
+        String collection = definition.getName();
+
+        SchemaValidation.validate(definition);
+
+        if (MockData.SCHEMAS.containsKey(collection)) {
+
+            throw new PlugException(
+                    "Collection already exists: " + collection
+            );
+        }
+
+        Map<String, Class<?>> schema =
+                new LinkedHashMap<>();
+
+        Map<String, Object> defaults =
+                new LinkedHashMap<>();
+
+        for (TableDefinition.FieldDefinition field :
+                definition.getFields()) {
+
+            schema.put(
+                    field.getName(),
+                    javaType(field.getType())
+            );
+
+            if (field.hasConstraint(
+                    TableDefinition.FieldConstraint.DEFAULT
+            )) {
+
+                Object literal =
+                        field.getDefaultValue().getValue();
+
+                /*
+                 * A decimal column's integer default becomes
+                 * the column's own Java type, so row values
+                 * match what a real server returns.
+                 */
+                if (javaType(field.getType()) == Double.class
+                        && literal instanceof Integer) {
+
+                    literal = (double) (Integer) literal;
+                }
+
+                defaults.put(field.getName(), literal);
+            }
+        }
+
+        MockData.SCHEMAS.put(collection, schema);
+
+        MockData.DEFAULTS.put(collection, defaults);
+
+        MockData.DATA.put(
+                collection,
+                new ArrayList<>()
+        );
+
+        return new QueryResult(
+                0,
+                new ArrayList<>()
+        );
+    }
+
+    /*
+     * Plug column types map to the mock's Java types — the
+     * same four types every other path produces.
+     */
+    private Class<?> javaType(
+            TableDefinition.FieldType type
+    ) {
+
+        switch (type) {
+
+            case INT:
+                return Integer.class;
+
+            case DECIMAL:
+                return Double.class;
+
+            case STRING:
+                return String.class;
+
+            case BOOL:
+                return Boolean.class;
+
+            default:
+                throw new PlugException(
+                        "Unsupported field type: " + type
+                );
         }
     }
 
@@ -588,6 +729,25 @@ public class MockDatabaseAdapter implements DatabaseAdapter {
 
         Map<String, Object> record =
                 new HashMap<>(plan.getData());
+
+        /*
+         * Omitted fields fall back to the collection's DDL
+         * defaults — the same server-side behavior the
+         * PostgreSQL adapter gets from DEFAULT clauses.
+         */
+        for (Map.Entry<String, Object> defaultEntry :
+                MockData.DEFAULTS
+                        .getOrDefault(
+                                plan.getCollection(),
+                                Collections.emptyMap()
+                        )
+                        .entrySet()) {
+
+            record.putIfAbsent(
+                    defaultEntry.getKey(),
+                    defaultEntry.getValue()
+            );
+        }
 
         Object explicitId =
                 record.get("id");

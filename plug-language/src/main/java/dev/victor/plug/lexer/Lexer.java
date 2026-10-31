@@ -66,6 +66,19 @@ public class Lexer {
                 addToken(TokenType.RBRACKET);
                 break;
 
+            /*
+             * Braces exist for DDL blocks:
+             *
+             * plug.create.table("users") { ... }
+             */
+            case '{':
+                addToken(TokenType.LBRACE);
+                break;
+
+            case '}':
+                addToken(TokenType.RBRACE);
+                break;
+
             case ';':
                 addToken(TokenType.SEMICOLON);
                 break;

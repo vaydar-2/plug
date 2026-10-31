@@ -6,6 +6,7 @@ import dev.victor.plug.ast.Argument;
 import dev.victor.plug.ast.Call;
 import dev.victor.plug.ast.Program;
 import dev.victor.plug.ast.Statement;
+import dev.victor.plug.ast.TableDefinition;
 import dev.victor.plug.ast.Value;
 import dev.victor.plug.lexer.Token;
 import dev.victor.plug.lexer.TokenType;
@@ -84,6 +85,31 @@ public class Parser {
                 "Expected method name."
         );
 
+        /*
+         * plug.create is spelled with two dots:
+         *
+         * plug.create.table("users") { ... }
+         * plug.create.database("shop")
+         *
+         * The call is normalized to object "plug.create" and
+         * method "table"/"database" so the runtime dispatches
+         * on the same object.method shape as every other call.
+         */
+        if (firstCall
+                && object.equals("plug")
+                && method.equals("create")
+                && check(TokenType.DOT)
+                && peekNext().getType() == TokenType.IDENTIFIER
+                && (peekNext().getValue().equals("table")
+                || peekNext().getValue().equals("database"))) {
+
+            advance(); // consume the second dot
+
+            object = "plug.create";
+
+            method = advance().getValue();
+        }
+
         consume(
                 TokenType.LPAREN,
                 "Expected '(' after method name."
@@ -144,6 +170,22 @@ public class Parser {
                 TokenType.RPAREN,
                 "Expected ')' after arguments."
         );
+
+        /*
+         * plug.create.table() is followed by a braced block of
+         * column definitions; it is the one call shape in the
+         * language that owns a block after its parenthesis.
+         */
+        if (object.equals("plug.create")
+                && method.equals("table")) {
+
+            return new Call(
+                    object,
+                    method,
+                    arguments,
+                    tableDefinition(arguments)
+            );
+        }
 
         return new Call(
                 object,
@@ -217,6 +259,219 @@ public class Parser {
         }
 
         return arguments;
+    }
+
+    /*
+     * The braced column-definition block of create.table():
+     *
+     * {
+     *     id: INT primary_key,
+     *     name: STRING required
+     * }
+     *
+     * Fields are separated by commas; constraints follow the
+     * type as bare identifiers, with `default` consuming one
+     * literal value. Nothing structural is kept as text —
+     * the block becomes a typed TableDefinition.
+     */
+    private TableDefinition tableDefinition(
+            List<Argument> arguments
+    ) {
+
+        if (arguments.size() != 1
+                || arguments.get(0).getName() != null
+                || arguments.get(0).getValue() == null
+                || arguments.get(0).getValue().getType()
+                != Value.Type.STRING) {
+
+            throw new PlugException(
+                    "plug.create.table requires a table name, "
+                            + "e.g. plug.create.table(\"users\").",
+                    peek().getLine()
+            );
+        }
+
+        String name = (String) arguments
+                .get(0)
+                .getValue()
+                .getValue();
+
+        consume(
+                TokenType.LBRACE,
+                "Expected '{' with column definitions after "
+                        + "plug.create.table(...)."
+        );
+
+        List<TableDefinition.FieldDefinition> fields =
+                new ArrayList<>();
+
+        while (!check(TokenType.RBRACE)) {
+
+            fields.add(fieldDefinition());
+
+            if (match(TokenType.COMMA)) {
+                continue;
+            }
+
+            break;
+        }
+
+        consume(
+                TokenType.RBRACE,
+                "Expected ',' or '}' in column definitions."
+        );
+
+        if (fields.isEmpty()) {
+
+            throw new PlugException(
+                    "Table must define at least one field.",
+                    peek().getLine()
+            );
+        }
+
+        for (int i = 0; i < fields.size(); i++) {
+
+            for (int j = i + 1;
+                    j < fields.size();
+                    j++) {
+
+                if (fields.get(i).getName()
+                        .equals(fields.get(j).getName())) {
+
+                    throw new PlugException(
+                            "Duplicate field in table definition: "
+                                    + fields.get(j).getName(),
+                            peek().getLine()
+                    );
+                }
+            }
+        }
+
+        return new TableDefinition(name, fields);
+    }
+
+    private TableDefinition.FieldDefinition fieldDefinition() {
+
+        String name = consumeIdentifier(
+                "Expected a field name in column definition."
+        );
+
+        consume(
+                TokenType.COLON,
+                "Expected ':' after the field name "
+                        + name + "."
+        );
+
+        TableDefinition.FieldType type = fieldType();
+
+        List<TableDefinition.FieldConstraint> constraints =
+                new ArrayList<>();
+
+        Value defaultValue = null;
+
+        /*
+         * Constraints are bare identifiers right after the
+         * type. Anything not in the language's constraint set
+         * is a parse error — definitions never carry unknown
+         * names into validation or adapters.
+         */
+        while (check(TokenType.IDENTIFIER)) {
+
+            String constraint = advance().getValue();
+
+            TableDefinition.FieldConstraint parsed =
+                    constraint(constraint);
+
+            if (constraints.contains(parsed)) {
+
+                throw new PlugException(
+                        "Duplicate constraint '"
+                                + constraint
+                                + "' on field " + name + ".",
+                        peek().getLine()
+                );
+            }
+
+            constraints.add(parsed);
+
+            if (parsed == TableDefinition.FieldConstraint.DEFAULT) {
+
+                defaultValue = parseValue();
+            }
+        }
+
+        return new TableDefinition.FieldDefinition(
+                name,
+                type,
+                constraints,
+                defaultValue
+        );
+    }
+
+    private TableDefinition.FieldConstraint constraint(
+            String constraint
+    ) {
+
+        switch (constraint.toLowerCase()) {
+
+            case "primary_key":
+                return TableDefinition.FieldConstraint.PRIMARY_KEY;
+
+            case "required":
+                return TableDefinition.FieldConstraint.REQUIRED;
+
+            case "unique":
+                return TableDefinition.FieldConstraint.UNIQUE;
+
+            case "default":
+                return TableDefinition.FieldConstraint.DEFAULT;
+
+            default:
+                throw new PlugException(
+                        "Unsupported constraint: " + constraint
+                                + ". Supported constraints are "
+                                + "primary_key, required, unique "
+                                + "and default.",
+                        peek().getLine()
+                );
+        }
+    }
+
+    private TableDefinition.FieldType fieldType() {
+
+        Token token = advance();
+
+        if (token.getType() != TokenType.IDENTIFIER) {
+
+            throw new PlugException(
+                    "Expected a field type, e.g. "
+                            + "INT, DECIMAL, STRING or BOOL.",
+                    peek().getLine()
+            );
+        }
+
+        switch (token.getValue().toUpperCase()) {
+
+            case "INT":
+                return TableDefinition.FieldType.INT;
+
+            case "DECIMAL":
+                return TableDefinition.FieldType.DECIMAL;
+
+            case "STRING":
+                return TableDefinition.FieldType.STRING;
+
+            case "BOOL":
+                return TableDefinition.FieldType.BOOL;
+
+            default:
+                throw new PlugException(
+                        "Unsupported type: " + token.getValue()
+                                + ". Supported types are INT, "
+                                + "DECIMAL, STRING and BOOL.",
+                        peek().getLine()
+                );
+        }
     }
 
     private List<Argument> arguments() {

@@ -2,6 +2,8 @@ package dev.victor.plug.runtime;
 
 import dev.victor.plug.PlugException;
 
+import dev.victor.plug.ast.TableDefinition;
+
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.sql.Connection;
@@ -10,6 +12,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -47,6 +50,13 @@ public class PostgresDatabaseAdapter implements DatabaseAdapter {
 
     private Connection connection;
 
+    /*
+     * Kept for schema operations that outlive or sidestep the
+     * current connection: CREATE DATABASE runs on a fresh
+     * administrative connection to the server's own database.
+     */
+    private ConnectionConfig config;
+
     private final Map<String, Map<String, Class<?>>> schemaCache =
             new LinkedHashMap<>();
 
@@ -69,6 +79,8 @@ public class PostgresDatabaseAdapter implements DatabaseAdapter {
                     config.getUsername(),
                     config.getPassword()
             );
+
+            this.config = config;
 
             /*
              * Fail fast on unusable connections rather than
@@ -122,10 +134,148 @@ public class PostgresDatabaseAdapter implements DatabaseAdapter {
         }
     }
 
+    /*
+     * Schema operations share the runtime's validation and
+     * compile down to plain DDL. A newly created table's
+     * cached schema is dropped, so the next use() introspects
+     * columns fresh from information_schema.
+     */
+    @Override
+    public QueryResult executeSchema(SchemaPlan plan) {
+
+        requireConnection();
+
+        switch (plan.getOperation()) {
+
+            case CREATE_TABLE:
+                return createTable(plan.getTable());
+
+            case CREATE_DATABASE:
+                return createDatabase(plan.getDatabaseName());
+
+            default:
+                throw new PlugException(
+                        "Unsupported schema operation: "
+                                + plan.getOperation()
+                );
+        }
+    }
+
+    private QueryResult createTable(
+            TableDefinition definition
+    ) {
+
+        String sql =
+                PostgresSchemaCompiler.compileCreateTable(
+                        definition
+                );
+
+        try (Statement statement =
+                     connection.createStatement()) {
+
+            statement.execute(sql);
+
+        } catch (SQLException e) {
+
+            if ("42P07".equals(e.getSQLState())) {
+
+                throw new PlugException(
+                        "Collection already exists: "
+                                + definition.getName()
+                );
+            }
+
+            throw new PlugException(
+                    "CREATE TABLE failed: " + e.getMessage()
+            );
+        }
+
+        schemaCache.remove(definition.getName());
+
+        return new QueryResult(
+                0,
+                new ArrayList<>()
+        );
+    }
+
+    /*
+     * CREATE DATABASE cannot run inside a transaction and is
+     * not tied to the connected database, so it runs on a
+     * short-lived administrative connection to the server's
+     * own "postgres" database, always closed on exit. The
+     * script's own connection is left untouched.
+     */
+    private QueryResult createDatabase(String name) {
+
+        String sql =
+                PostgresSchemaCompiler.compileCreateDatabase(name);
+
+        String adminUrl =
+                "jdbc:postgresql://"
+                        + config.getHost()
+                        + ":"
+                        + config.getPort()
+                        + "/postgres";
+
+        try (Connection admin = DriverManager.getConnection(
+                adminUrl,
+                config.getUsername(),
+                config.getPassword()
+        )) {
+
+            admin.setAutoCommit(true);
+
+            try (Statement statement =
+                         admin.createStatement()) {
+
+                statement.execute(sql);
+
+            } catch (SQLException e) {
+
+                if ("42P04".equals(e.getSQLState())) {
+
+                    throw new PlugException(
+                            "Database already exists: " + name
+                    );
+                }
+
+                if ("42501".equals(e.getSQLState())) {
+
+                    throw new PlugException(
+                            "Insufficient privilege to create "
+                                    + "database " + name + ": "
+                                    + e.getMessage()
+                    );
+                }
+
+                throw new PlugException(
+                        "CREATE DATABASE failed: "
+                                + e.getMessage()
+                );
+            }
+
+        } catch (SQLException e) {
+
+            throw new PlugException(
+                    "Cannot reach the PostgreSQL server to "
+                            + "create database " + name + ": "
+                            + e.getMessage()
+            );
+        }
+
+        return new QueryResult(
+                0,
+                new ArrayList<>()
+        );
+    }
+
     @Override
     public void close() {
 
         schemaCache.clear();
+
+        config = null;
+
 
         if (connection == null) {
             return;

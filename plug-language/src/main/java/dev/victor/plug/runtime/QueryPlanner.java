@@ -50,4 +50,13 @@ public class QueryPlanner {
                 aggregateField
         );
     }
+
+    /*
+     * Schema work travels through its own plan type: a
+     * validated definition (table) or name (database),
+     * carried separately from the CRUD plan shape.
+     */
+    public SchemaPlan planSchema(SchemaPlan schemaPlan) {
+        return schemaPlan;
+    }
 }

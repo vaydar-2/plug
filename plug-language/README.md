@@ -81,6 +81,54 @@ An unknown driver fails with the list of registered drivers, e.g.
 plug.use("users");
 ```
 
+### plug.create.table(...) — define a table
+
+DDL rides the same connection context as CRUD (a connection is required;
+no collection is). The block defines columns with types and constraints;
+unknown types, unknown constraints, duplicate fields, and duplicate
+constraints are parse errors, and identifiers must be lowercase, digit,
+underscore names:
+
+```plug
+plug.create.table("products") {
+    id: INT primary_key,
+    name: STRING required,
+    category: STRING unique,
+    price: DECIMAL default 9.99,
+    active: BOOL default true
+};
+
+Table created: products
+```
+
+- Types: `INT` (integer), `DECIMAL` (double precision), `STRING` (text),
+  `BOOL` (boolean) — case-insensitive.
+- Constraints: `primary_key`, `required` (NOT NULL), `unique`, and
+  `default` with a literal of the column's own type (integer for `INT`,
+  any number for `DECIMAL`, a string for `STRING`, `true`/`false` for
+  `BOOL`). Lists, identifiers, and `null` defaults are rejected.
+- Supported constraints are applied, never dropped: on the mock, omitted
+  insert fields fall back to the defaults; on PostgreSQL, `DEFAULT`
+  clauses do it server-side. An unsupported constraint name is a parse
+  error — definitions never carry unknown names into an adapter.
+- DDL cannot be chained with `.where()`/`.and()`/`.or()` or aggregates.
+
+### plug.create.database(...) — create a database
+
+```plug
+plug.create.database("shop");
+
+Database created: shop
+```
+
+On PostgreSQL this runs on its own short-lived administrative
+connection to the server's `postgres` database (CREATE DATABASE cannot
+run inside a transaction); the current connection is untouched and
+always cleaned up. The mock validates the name and succeeds.
+
+More schema operations (alter table, indexes, drop operations) are
+planned and stay out of scope for now.
+
 ### plug.close() — close the connection
 
 ```plug
@@ -490,6 +538,11 @@ PLUG_PG_USER=victor PLUG_PG_PASSWORD=secret mvn test
 - The PostgreSQL adapter compiles plans to parameterized SQL through
   `PostgresQueryCompiler`, shares all schema/type/join validation with
   the mock via `QueryValidation`, and owns only the JDBC mechanics.
+- DDL is typed end to end: `TableDefinition`/`FieldDefinition` in the
+  AST, semantic checks in `SchemaValidation`, a `SchemaPlan` through
+  `QueryPlanner.planSchema` and `ExecutionEngine.executeSchema`, and a
+  separate adapter contract method (`executeSchema`) — never squeezed
+  into the CRUD plan shape. SQL comes from `PostgresSchemaCompiler`.
 
 ## Roadmap
 
@@ -499,5 +552,8 @@ PLUG_PG_USER=victor PLUG_PG_PASSWORD=secret mvn test
    IS NOT NULL), and joins (`.join(collection, on: ...)`) are done.
 2. Real adapters: PostgreSQL is done (parameterized SQL over JDBC,
    integration tests gated on `PLUG_PG_HOST`); MongoDB is next.
-3. PlugDB — a custom database using Plug as its query language.
-4. Adapters for more database categories.
+3. Foundational DDL is done: `plug.create.table(...)` and
+   `plug.create.database(...)` on both adapters; alter/index/drop are
+   the next schema features.
+4. PlugDB — a custom database using Plug as its query language.
+5. Adapters for more database categories.

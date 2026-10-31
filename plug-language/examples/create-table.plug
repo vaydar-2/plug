@@ -1,0 +1,39 @@
+# DDL walkthrough: creating a table, inserting records, and
+# querying them — same statements work unchanged against a
+# PostgreSQL server (just change the driver).
+# Run with: java -cp target/classes dev.victor.plug.Main examples/create-table.plug
+
+plug.connect(driver: "mock", host: "localhost", port: 5432, database: "mydb", username: "victor", password: "secret");
+
+# ------------------------------------------------------------ create a table
+plug.create.table("products") {
+    id: INT primary_key,
+    name: STRING required,
+    category: STRING unique,
+    price: DECIMAL default 9.99,
+    active: BOOL default true
+};
+
+# ------------------------------------------------------------- insert records
+plug.use("products");
+
+# Omitted fields fall back to the table's defaults:
+plug.insert(name: "Laptop", category: "electronics", price: 450.0);
+plug.insert(name: "Phone", category: "electronics", price: 250.5);
+plug.insert(name: "Book", category: "media");                       # price 9.99, active true
+plug.insert(name: "Archived item", category: "misc", active: false);
+
+# ------------------------------------------------------------------- queries
+plug.get(id, name, price, active).where((price, GTE, 10.0));
+plug.get(name).where((active, EQ, true));
+plug.get().sum(price);
+plug.get().count();
+
+# --------------------------------------------------------------- modify + delete
+plug.update(price: 199.99).where((name, EQ, "Phone"));
+plug.get(name, price).where((name, EQ, "Phone"));
+
+plug.delete().where((name, EQ, "Archived item"));
+plug.get().where((name, EQ, "Archived item")).count();
+
+plug.close();
