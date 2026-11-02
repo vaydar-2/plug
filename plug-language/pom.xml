@@ -38,6 +38,18 @@
     </dependencies>
 
     <build>
+        <!--
+            Filter src/main/resources so version.properties picks
+            up the pom's <version>; the CLI reports this value
+            (the version command), keeping CLI/language/build
+            versions consistent from one source.
+        -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

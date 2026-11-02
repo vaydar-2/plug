@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -114,6 +115,12 @@ public class CliTest {
         assertTrue(result.out().contains(
                 "Plug language " + Version.LANGUAGE
         ));
+
+        /*
+         * CLI, language, and build report one build-derived
+         * version, never independently assigned constants.
+         */
+        assertEquals(Version.CLI, Version.LANGUAGE);
 
         assertTrue(result.err().isEmpty());
     }
@@ -288,8 +295,240 @@ public class CliTest {
         assertEquals(2, result.exit());
 
         assertTrue(result.err().contains(
-                "requires a script file"
+                "requires exactly one script file"
         ));
+    }
+
+    @Test
+    public void checkRequiresFileArgument() {
+
+        Result result = run(new String[]{"check"});
+
+        assertEquals(2, result.exit());
+
+        assertTrue(result.err().contains(
+                "requires exactly one script file"
+        ));
+    }
+
+    @Test
+    public void runRejectsExtraArguments() throws IOException {
+
+        String first = writeScript(
+                "first.plug",
+                CONNECT_AND_READ
+        );
+
+        String second = writeScript(
+                "second.plug",
+                CONNECT_AND_READ
+        );
+
+        Result result = run(new String[]{"run", first, second});
+
+        assertEquals(2, result.exit());
+
+        assertTrue(result.err().contains(
+                "accepts exactly one script file; got 2"
+        ));
+
+        /*
+         * An extra-argument mistake must not execute anything:
+         * no script output is allowed on stdout.
+         */
+        assertTrue(result.out().isEmpty());
+    }
+
+    @Test
+    public void checkRejectsExtraArguments() throws IOException {
+
+        String first = writeScript(
+                "first.plug",
+                CONNECT_AND_READ
+        );
+
+        Result result = run(new String[]{
+                "check",
+                first,
+                "--verbose"
+        });
+
+        assertEquals(2, result.exit());
+
+        assertTrue(result.err().contains(
+                "accepts exactly one script file; got 2"
+        ));
+    }
+
+    @Test
+    public void legacyBareScriptRejectsExtraArguments()
+            throws IOException {
+
+        String script = writeScript(
+                "legacy.plug",
+                CONNECT_AND_READ
+        );
+
+        Result result = run(new String[]{script, script});
+
+        assertEquals(2, result.exit());
+
+        assertTrue(result.err().contains(
+                "exactly one file"
+        ));
+    }
+
+    @Test
+    public void runReportsInaccessibleFile() throws IOException {
+
+        /*
+         * A directory is the portable stand-in for an
+         * unreadable target: reading it fails on every
+         * platform with an IOException, whatever its message.
+         */
+        Path directory = tempDir.resolve("a-directory");
+
+        Files.createDirectory(directory);
+
+        Result result = run(new String[]{"run", directory.toString()});
+
+        assertEquals(1, result.exit());
+
+        assertFalse(result.err().isEmpty());
+
+        assertTrue(result.err().contains(directory.toString()));
+    }
+
+    @Test
+    public void versionRejectsExtraArguments() {
+
+        Result result = run(
+                new String[]{"--version", "extra"}
+        );
+
+        assertEquals(2, result.exit());
+
+        assertTrue(result.err().contains(
+                "--version accepts no arguments"
+        ));
+
+        assertTrue(result.out().isEmpty());
+    }
+
+    @Test
+    public void helpRejectsExtraArguments() {
+
+        Result result = run(
+                new String[]{"--help", "extra"}
+        );
+
+        assertEquals(2, result.exit());
+
+        assertTrue(result.err().contains(
+                "--help accepts no arguments"
+        ));
+
+        assertTrue(result.out().isEmpty());
+    }
+
+    @Test
+    public void blankCommandIsAUsageError() {
+
+        Result result = run(new String[]{""});
+
+        assertEquals(2, result.exit());
+
+        assertTrue(result.err().contains("No command given."));
+    }
+
+    @Test
+    public void blankFileTargetIsAUsageError() throws IOException {
+
+        /*
+         * An empty quoted name must be a clear usage error, not
+         * a confusing "No such file: " with an invisible path.
+         */
+        Result emptyRun = run(new String[]{"run", ""});
+
+        assertEquals(2, emptyRun.exit());
+
+        assertTrue(emptyRun.err().contains("non-empty"));
+
+        Result blankCheck = run(new String[]{"check", "   "});
+
+        assertEquals(2, blankCheck.exit());
+
+        assertTrue(blankCheck.err().contains("non-empty"));
+    }
+
+    @Test
+    public void runReportsInvalidPathCleanly() throws IOException {
+
+        /*
+         * "bad|pipe.plug" is not representable on Windows-family
+         * filesystems (Path.of throws InvalidPathException), but
+         * is a legal file name elsewhere — the test only asserts
+         * where the name really is invalid.
+         */
+        String target = "bad|pipe.plug";
+
+        try {
+
+            Path.of(target);
+
+        } catch (InvalidPathException expected) {
+
+            Result result = run(new String[]{"run", target});
+
+            assertEquals(1, result.exit());
+
+            assertTrue(result.err().contains(
+                    "Invalid path: " + target
+            ));
+
+            /*
+             * The encoder internals must not leak into the
+             * user-visible diagnostic.
+             */
+            assertFalse(
+                    result.err().contains("Exception")
+            );
+
+            return;
+        }
+
+        /*
+         * Filesystems that accept the name: nothing invalid to
+         * exercise here.
+         */
+    }
+
+    @Test
+    public void checkReportsInvalidPathCleanly() throws IOException {
+
+        String target = "also|invalid.plug";
+
+        try {
+
+            Path.of(target);
+
+        } catch (InvalidPathException expected) {
+
+            Result result = run(new String[]{"check", target});
+
+            assertEquals(1, result.exit());
+
+            assertTrue(result.err().contains(
+                    "Invalid path: " + target
+            ));
+
+            /*
+             * check must fail on the path before any parsing.
+             */
+            assertFalse(result.out().startsWith("ok:"));
+
+            return;
+        }
     }
 
     @Test

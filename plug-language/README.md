@@ -66,9 +66,9 @@ once installed through jpackage.
 
 | Command                 | Behavior |
 |-------------------------|----------|
-| `plug run <file.plug>`   | Executes a script (same output as before) |
-| `plug check <file.plug>` | Static validation: lex + parse only; prints `ok: <file>` on success, never touches a database |
-| `plug --version`         | CLI and language versions |
+| `plug run <file.plug>`   | Executes a script (same output as before); exactly one file argument |
+| `plug check <file.plug>` | Syntax check — lexing + parsing only, nothing executes; prints `ok: <file>` on success |
+| `plug --version`         | CLI and language versions (build-derived) |
 | `plug --help`            | Usage information |
 
 The CLI does argument dispatch, file reading, and exit codes only —
@@ -79,15 +79,24 @@ kept separate from the language parser (`dev.victor.plug.cli` vs.
 
 Notes:
 
-- Paths may be relative or absolute and may contain spaces — quoted
-  paths work as-is, and unquoted multi-word arguments are rejoined
-  (`plug run my script.plug` also resolves).
-- Exit codes: `0` success, `1` file-not-found / parse / static /
-  runtime failure, `2` usage error (unknown command, missing
-  argument). Results go to stdout, errors to stderr.
-- `check` validates syntax and grammar only (including DDL
-  definitions); it does not open connections or resolve schema-backed
-  types, which only exist at execution time.
+- Paths may be relative or absolute and may contain spaces — quote
+  paths the way you would with any Unix-style tool and they reach the
+  CLI intact (`plug run "my script.plug"`). `run` and `check` accept
+  exactly one file; missing or unexpected extra arguments are rejected
+  with a usage error.
+- Exit codes: `0` success, `1` file-not-found / parse / runtime
+  failure, `2` usage error (unknown command, missing or extra
+  arguments). Results go to stdout, errors to stderr.
+- `check` is a **syntax** check — lexing and parsing only (including
+  DDL definitions). It does not touch a database and does not validate
+  database schemas, driver availability, or runtime behavior: those
+  only exist (and fail) at execution time. It never opens a
+  connection, so a fully valid syntax verdict says nothing about
+  whether a database or driver actually works.
+- The first line of any failure is the exception's own message (with
+  its line number when the language provides one); exceptions without
+  a message fall back to the exception type. Stack traces are not
+  part of the ordinary CLI output.
 - The interactive REPL is explicitly deferred; `plug repl` says so and
   exits with a usage error.
 - `dev.victor.plug.Main` remains the entry point for manual classpath
@@ -193,18 +202,15 @@ Table created: products
   error — definitions never carry unknown names into an adapter.
 - DDL cannot be chained with `.where()`/`.and()`/`.or()` or aggregates.
 
-### plug.create.database(...) — create a database
+### Database creation — deferred
 
-```plug
-plug.create.database("shop");
-
-Database created: shop
-```
-
-On PostgreSQL this runs on its own short-lived administrative
-connection to the server's `postgres` database (CREATE DATABASE cannot
-run inside a transaction); the current connection is untouched and
-always cleaned up. The mock validates the name and succeeds.
+Creating databases through Plug is **deferred** — that gap is a
+deliberate language decision, not missing plumbing. Plug scripts work
+against *existing* databases (the `mock` sample data or a real server
+database that exists before the script runs); `plug.connect...` targets
+a server plus an existing database, and all schema work happens inside
+that database through `plug.create.table(...)`. No statement mints a
+new database.
 
 More schema operations (alter table, indexes, drop operations) are
 planned and stay out of scope for now.
@@ -632,8 +638,9 @@ PLUG_PG_USER=victor PLUG_PG_PASSWORD=secret mvn test
    IS NOT NULL), and joins (`.join(collection, on: ...)`) are done.
 2. Real adapters: PostgreSQL is done (parameterized SQL over JDBC,
    integration tests gated on `PLUG_PG_HOST`); MongoDB is next.
-3. Foundational DDL is done: `plug.create.table(...)` and
-   `plug.create.database(...)` on both adapters; alter/index/drop are
-   the next schema features.
+3. Foundational DDL is done: `plug.create.table(...)` compiles and
+   runs on both adapters; database creation through Plug is deferred
+   by decision — scripts connect to existing databases. Alter/index/
+   drop are the next schema features.
 4. PlugDB — a custom database using Plug as its query language.
 5. Adapters for more database categories.

@@ -9,6 +9,7 @@ import dev.victor.plug.runtime.Runtime;
 import java.io.IOException;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.List;
@@ -29,7 +30,7 @@ import java.util.List;
  * Exit codes:
  *   0  success
  *   1  file, parse, or execution failure
- *   2  usage error (unknown command, missing argument)
+ *   2  usage error (unknown command, malformed arguments)
  */
 public final class Cli {
 
@@ -48,23 +49,31 @@ public final class Cli {
 
         String command = arguments[0];
 
+        if (command.isBlank()) {
+
+            System.err.println(
+                    "Error: No command given."
+            );
+
+            return 2;
+        }
+
         switch (command) {
 
             case "--version":
             case "-v":
-                return version();
+                return versionCommand(arguments);
 
             case "--help":
             case "-h":
             case "help":
-                printUsage();
-                return 0;
+                return helpCommand(arguments);
 
             case "run":
             case "check":
                 return scriptCommand(
                         command,
-                        rest(arguments)
+                        arguments
                 );
 
             case "repl":
@@ -75,25 +84,53 @@ public final class Cli {
                 return 2;
 
             default:
-                return unknownCommand(command);
+                return unknownCommand(command, arguments);
         }
     }
 
     /*
-     * run and check share one target-resolution path; only the
-     * execution depth differs (execute everything vs. static
-     * lex + parse).
+     * run and check share one argument shape: exactly one file
+     * path. Quoted paths containing spaces arrive as a single
+     * argument; anything else (missing, extra arguments) is a
+     * usage error, per the conventional CLI contract.
      */
     private int scriptCommand(
             String command,
-            String target
+            String[] arguments
     ) {
 
-        if (target.isEmpty()) {
+        if (arguments.length == 1) {
 
             System.err.println(
                     "Error: " + command
-                            + " requires a script file."
+                            + " requires exactly one script file."
+            );
+
+            System.err.println(
+                    "Run 'plug --help' for usage."
+            );
+
+            return 2;
+        }
+
+        if (arguments.length > 2) {
+
+            System.err.println(
+                    "Error: " + command + " accepts exactly one "
+                            + "script file; got "
+                            + (arguments.length - 1) + "."
+            );
+
+            return 2;
+        }
+
+        String target = arguments[1];
+
+        if (target.isBlank()) {
+
+            System.err.println(
+                    "Error: " + command + " requires a non-empty "
+                            + "script file name."
             );
 
             return 2;
@@ -105,12 +142,63 @@ public final class Cli {
     }
 
     /*
-     * Legacy compatibility: a bare .plug path takes the direct
-     * plug <file> invocation of the original Main.
+     * The informational commands take no arguments; anything
+     * after them is a usage mistake, rejected like every other
+     * malformed invocation instead of silently ignored.
      */
-    private int unknownCommand(String command) {
+    private int versionCommand(String[] arguments) {
+
+        if (arguments.length > 1) {
+
+            System.err.println(
+                    "Error: --version accepts no arguments; got "
+                            + (arguments.length - 1) + "."
+            );
+
+            return 2;
+        }
+
+        return version();
+    }
+
+    private int helpCommand(String[] arguments) {
+
+        if (arguments.length > 1) {
+
+            System.err.println(
+                    "Error: --help accepts no arguments; got "
+                            + (arguments.length - 1) + "."
+            );
+
+            return 2;
+        }
+
+        printUsage();
+
+        return 0;
+    }
+
+    /*
+     * Legacy compatibility: a bare .plug path takes the direct
+     * plug <file> invocation of the original Main — and follows
+     * the same validation rules: exactly one file, nothing else.
+     */
+    private int unknownCommand(
+            String command,
+            String[] arguments
+    ) {
 
         if (command.toLowerCase().endsWith(".plug")) {
+
+            if (arguments.length > 1) {
+
+                System.err.println(
+                        "Error: Unexpected extra arguments: a bare "
+                                + "script must be exactly one file."
+                );
+
+                return 2;
+            }
 
             return execute(command);
         }
@@ -134,7 +222,7 @@ public final class Cli {
 
             source = readSource(target);
 
-        } catch (IOException e) {
+        } catch (IOException | InvalidPathException e) {
 
             System.err.println(
                     readFailureMessage(target, e)
@@ -151,9 +239,7 @@ public final class Cli {
 
         } catch (Exception e) {
 
-            System.err.println(
-                    "Error: " + e.getMessage()
-            );
+            System.err.println(failureMessage(e));
 
             return 1;
         }
@@ -174,7 +260,7 @@ public final class Cli {
 
             source = readSource(target);
 
-        } catch (IOException e) {
+        } catch (IOException | InvalidPathException e) {
 
             System.err.println(
                     readFailureMessage(target, e)
@@ -189,9 +275,7 @@ public final class Cli {
 
         } catch (Exception e) {
 
-            System.err.println(
-                    "Error: " + e.getMessage()
-            );
+            System.err.println(failureMessage(e));
 
             return 1;
         }
@@ -211,8 +295,19 @@ public final class Cli {
 
     private static String readFailureMessage(
             String target,
-            IOException e
+            Exception e
     ) {
+
+        if (e instanceof InvalidPathException) {
+
+            /*
+             * Path.of rejects names the filesystem cannot even
+             * represent (illegal characters, NUL bytes). The
+             * exception's own message is raw encoder detail —
+             * echoing the invoked path is the useful part.
+             */
+            return "Error: Invalid path: " + target;
+        }
 
         if (e instanceof NoSuchFileException) {
 
@@ -224,8 +319,32 @@ public final class Cli {
             return "Error: Permission denied: " + target;
         }
 
+        String detail = e.getMessage();
+
         return "Error: Cannot read file: " + target
-                + " (" + e.getMessage() + ")";
+                + (detail == null || detail.isBlank()
+                        ? ""
+                        : " (" + detail + ")");
+    }
+
+    /*
+     * One diagnostic line for ordinary users: the message the
+     * language produced (with its line number), or — when an
+     * exception carries a null or blank message — the exception
+     * type as a fallback. Stack traces stay out of the CLI's
+     * visible output.
+     */
+    private static String failureMessage(Exception e) {
+
+        String message = e.getMessage();
+
+        if (message == null || message.isBlank()) {
+
+            message = "unexpected failure: "
+                    + e.getClass().getName();
+        }
+
+        return "Error: " + message;
     }
 
     private static Program parse(String source) {
@@ -238,7 +357,6 @@ public final class Cli {
     }
 
     private static int version() {
-
         System.out.println(
                 "plug CLI " + Version.CLI
         );
@@ -266,7 +384,8 @@ public final class Cli {
 
         System.out.println(
                 "  plug check <file.plug>  "
-                        + "Validate a script without executing it"
+                        + "Validate syntax only "
+                        + "(lex + parse; nothing executes)"
         );
 
         System.out.println(
@@ -281,8 +400,8 @@ public final class Cli {
 
         System.out.println();
         System.out.println(
-                "A single bare <file.plug> argument runs that "
-                        + "script directly."
+                "A bare <file.plug> argument (exactly one file) runs "
+                        + "that script directly."
         );
 
         System.out.println();
@@ -296,25 +415,4 @@ public final class Cli {
         );
     }
 
-    /*
-     * Joins the arguments after the command back into one name so
-     * an unquoted path with spaces ("plug run my script.plug")
-     * still resolves; a quoted path arrives as one argument and
-     * joins to itself.
-     */
-    private static String rest(String[] arguments) {
-
-        StringBuilder path = new StringBuilder();
-
-        for (int index = 1; index < arguments.length; index++) {
-
-            if (index > 1) {
-                path.append(' ');
-            }
-
-            path.append(arguments[index]);
-        }
-
-        return path.toString();
-    }
 }
