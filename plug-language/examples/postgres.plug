@@ -4,7 +4,7 @@
 # Run with: java -cp target/classes dev.victor.plug.Main examples/postgres.plug
 
 # ----------------------------------------------------------------- connect
-plug.connect(driver: "postgres", host: "localhost", port: 5432, database: "plugdb", username: "victor", password: "secret");
+plug.connect(driver: "postgres", host: "localhost", port: 5432, database: "plugdb", username: "postgres", password: "Vaydar123!");
 
 plug.use("users");
 

@@ -9,8 +9,6 @@
     <version>1.0-SNAPSHOT</version>
 
     <properties>
-        <maven.compiler.source>27</maven.compiler.source>
-        <maven.compiler.target>27</maven.compiler.target>
         <junit.version>5.10.2</junit.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
@@ -39,6 +37,11 @@
 
     <build>
         <!--
+            Name the packaged artifact plug.jar: the runnable,
+            dependency-bundled executable produced in package.
+        -->
+        <finalName>plug</finalName>
+        <!--
             Filter src/main/resources so version.properties picks
             up the pom's <version>; the CLI reports this value
             (the version command), keeping CLI/language/build
@@ -51,6 +54,21 @@
             </resource>
         </resources>
         <plugins>
+            <!--
+                Compiled with release 17: bytecode targets Java 17
+                (class file version 61) and the API surface is
+                checked against the documented Java 17 methods, so
+                the packaged jar runs on any Java 17+ install.
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>17</release>
+                </configuration>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
@@ -58,18 +76,17 @@
             </plugin>
 
             <!--
-                Distribution packaging: a shaded, runnable jar
-                (plug-<version>-shaded.jar) with Main-Class =
+                Distribution packaging: the main artifact itself
+                (plug.jar, via finalName) becomes the runnable
+                dependency-bundled executable with Main-Class =
                 dev.victor.plug.cli.CliMain, so
-                "java -jar plug-...-shaded.jar run s.plug"
-                works without a local classpath. The PostgreSQL
-                JDBC driver ships inside it automatically — it
-                is a compile-scope dependency of the postgres
-                adapter. The jar is attached as a separate
-                artifact; the plain jar keeps the original name
-                for mvn test consumers. Adapters self-register
-                statically (no META-INF/services), so no
-                service-resource transformer is needed.
+                "java -jar plug.jar run s.plug" works without a
+                local classpath. The PostgreSQL JDBC driver ships
+                inside it automatically — it is a compile-scope
+                dependency of the postgres adapter — and the
+                services transformer keeps its
+                META-INF/services/java.sql.Driver entry intact so
+                DriverManager can discover it at runtime.
             -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -82,9 +99,8 @@
                             <goal>shade</goal>
                         </goals>
                         <configuration>
-                            <shadedArtifactAttached>true</shadedArtifactAttached>
-                            <shadedClassifierName>shaded</shadedClassifierName>
                             <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>dev.victor.plug.cli.CliMain</mainClass>
                                 </transformer>

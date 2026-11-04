@@ -13,7 +13,7 @@ plug.get(name, country)
     );
 ```
 
-Plug is pure Java (JDK 27+) with zero runtime dependencies. The language is
+Plug is pure Java (compiled for Java 17+ runtimes) with zero runtime dependencies. The language is
 built here in `plug-language/`; this repository grows into a suite of modules
 around it (CLI, GUI, real database adapters, a custom engine, docs, website).
 
@@ -60,7 +60,7 @@ bundled in-memory `mock` adapter. Status of the language itself:
 | **DDL**: `plug.create.table(...) { ... }` on both adapters (database creation through Plug: **deferred by decision** — scripts connect to existing databases) | ✅ done |
 | MongoDB adapter, PlugDB, other backends | ⬜ next |
 
-Test suite: **189 tests, all green** (JUnit 5; the 5 PostgreSQL integration tests skip silently
+Test suite: **195 tests, all green** (JUnit 5; the 5 PostgreSQL integration tests skip silently
 unless `PLUG_PG_HOST` points at a reachable server).
 
 ### Running the language
@@ -126,8 +126,9 @@ database interaction), plus `--version`/`--help` — with documented
 exit codes (0 success, 1 script/file failure, 2 usage error) and
 stdout/stderr separation. The legacy bare `plug <file.plug>`
 invocation via `dev.victor.plug.Main` still works unchanged. `mvn
-package` attaches a shaded runnable jar with the PostgreSQL JDBC
-driver bundled; jpackage commands for self-contained native
+package` produces the runnable executable `target/plug.jar` with the
+PostgreSQL JDBC driver bundled (services entry preserved for
+`DriverManager`); jpackage commands for self-contained native
 distributions are documented in `plug-language/README.md` (the
 interactive REPL is explicitly deferred).
 

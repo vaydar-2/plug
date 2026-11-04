@@ -11,7 +11,15 @@
         <directory>src/main/resources</directory>
       </resource>
     </resources>
+    <finalName>plug</finalName>
     <plugins>
+      <plugin>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <release>17</release>
+        </configuration>
+      </plugin>
       <plugin>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
@@ -26,9 +34,8 @@
               <goal>shade</goal>
             </goals>
             <configuration>
-              <shadedArtifactAttached>true</shadedArtifactAttached>
-              <shadedClassifierName>shaded</shadedClassifierName>
               <transformers>
+                <transformer />
                 <transformer>
                   <mainClass>dev.victor.plug.cli.CliMain</mainClass>
                 </transformer>
@@ -74,8 +81,6 @@
   </dependencies>
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <maven.compiler.target>27</maven.compiler.target>
     <junit.version>5.10.2</junit.version>
-    <maven.compiler.source>27</maven.compiler.source>
   </properties>
 </project>

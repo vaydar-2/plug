@@ -371,7 +371,7 @@ public final class Cli {
     private static void printUsage() {
 
         System.out.println(
-                "Plug — a database-agnostic query language."
+                "Plug - a database-agnostic query language."
         );
 
         System.out.println();

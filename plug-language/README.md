@@ -13,7 +13,7 @@ plug.get(name, country)
     );
 ```
 
-Plug is pure Java (JDK 27+) with zero runtime dependencies. A console
+Plug is pure Java (compiled for Java 17+ runtimes) with zero runtime dependencies. A console
 launcher reads a `.plug` file, and a pluggable adapter layer executes the
 compiled query plan. The bundled `mock` adapter runs against in-memory
 sample data; backends register themselves by name — the PostgreSQL adapter
@@ -22,7 +22,9 @@ custom database using Plug as its native query language) next in line.
 
 ## Running
 
-Compile (requires JDK 27+; any build runner works, e.g. Maven `mvn compile`):
+Compile (requires a JDK 17+; any build runner works, e.g. Maven `mvn compile` —
+the build targets `--release 17`, so the packaged jar runs on any
+Java 17+ runtime):
 
 ```bash
 javac -d target/classes $(find src/main/java -name "*.java")
@@ -61,8 +63,8 @@ java -cp target/classes dev.victor.plug.cli.CliMain run examples/test.plug
 ```
 
 After packaging (below) the commands are simply
-`java -jar plug-<version>-shaded.jar run <file.plug>` — or `plug ...`
-once installed through jpackage.
+`java -jar plug.jar run <file.plug>` — or `plug ...` once installed
+through jpackage.
 
 | Command                 | Behavior |
 |-------------------------|----------|
@@ -105,28 +107,33 @@ Notes:
 
 ### Packaging and distribution
 
-`mvn package` attaches a shaded runnable jar with the PostgreSQL JDBC
-driver inside (adapters register statically, so no service-file
-merge is needed):
+`mvn package` produces the runnable executable `target/plug.jar` with
+the PostgreSQL JDBC driver inside. The jar replaces the plain artifact
+(the main class is `dev.victor.plug.cli.CliMain`), and the services
+transformer keeps the driver's `META-INF/services/java.sql.Driver`
+registration intact so `DriverManager` discovers it at runtime:
 
 ```bash
 mvn package
-java -jar target/plug-1.0-SNAPSHOT-shaded.jar run examples/test.plug
+java -jar target/plug.jar run examples/test.plug
+java -jar target/plug.jar --help
+java -jar target/plug.jar --version
+java -jar target/plug.jar check examples/create-table.plug
 ```
 
 For a self-contained executable that does not require Java, `jpackage`
-(JDK 27+, bundled with the JDK) produces a native launcher with a
+(JDK 17+, bundled with the JDK) produces a native launcher with a
 private bundled runtime from the same jar — no module path or
 `module-info` required:
 
 ```bash
 # platform-native app image (exe/msi on Windows, deb on Linux, dmg on macOS):
 jpackage --name plug --input target \
-         --main-jar plug-1.0-SNAPSHOT-shaded.jar
+         --main-jar plug.jar
 
 # explicit installer types:
-jpackage --name plug --type msi --input target --main-jar plug-1.0-SNAPSHOT-shaded.jar
-jpackage --name plug --type deb --input target --main-jar plug-1.0-SNAPSHOT-shaded.jar
+jpackage --name plug --type msi --input target --main-jar plug.jar
+jpackage --name plug --type deb --input target --main-jar plug.jar
 
 # a stripped runtime-only bundle, as an alternative:
 jlink --add-modules java.naming,java.sql,java.desktop \
@@ -134,7 +141,7 @@ jlink --add-modules java.naming,java.sql,java.desktop \
 ```
 
 Platform-specific installers are deliberately deferred until the CLI
-stabilizes; the shaded jar plus `jpackage` commands above are the
+stabilizes; the executable jar plus `jpackage` commands above are the
 distribution story for now.
 
 ## Language reference
