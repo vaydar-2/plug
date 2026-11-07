@@ -13,12 +13,16 @@ plug.get(name, country)
     );
 ```
 
-Plug is pure Java (compiled for Java 17+ runtimes) with zero runtime dependencies. A console
+Plug is pure Java (compiled for Java 17+ runtimes). The packaged executable bundles
+its database drivers (PostgreSQL JDBC and the MongoDB Java sync driver) plus a
+Logback SLF4J backend, so scripts need no external classpath. A console
 launcher reads a `.plug` file, and a pluggable adapter layer executes the
 compiled query plan. The bundled `mock` adapter runs against in-memory
 sample data; backends register themselves by name — the PostgreSQL adapter
-is already included (`driver: "postgres"`), with MongoDB and PlugDB (a
-custom database using Plug as its native query language) next in line.
+is already included (`driver: "postgres"`), and MongoDB is registered as
+`mongo`/`mongodb` with its connection lifecycle and read-query compiler in
+place; PlugDB (a custom database using Plug as its native query language)
+is next in line.
 
 ## Running
 
@@ -108,10 +112,14 @@ Notes:
 ### Packaging and distribution
 
 `mvn package` produces the runnable executable `target/plug.jar` with
-the PostgreSQL JDBC driver inside. The jar replaces the plain artifact
-(the main class is `dev.victor.plug.cli.CliMain`), and the services
-transformer keeps the driver's `META-INF/services/java.sql.Driver`
-registration intact so `DriverManager` discovers it at runtime:
+the PostgreSQL JDBC driver, the MongoDB Java sync driver, and the
+Logback SLF4J provider inside. The jar replaces the plain artifact (the
+main class is `dev.victor.plug.cli.CliMain`), and the services transformer
+keeps both the JDBC driver's `META-INF/services/java.sql.Driver`
+registration and the SLF4J provider registration intact, so
+`DriverManager` and `LoggerFactory` discover them at runtime. The MongoDB
+driver is bundled for the registered `mongo`/`mongodb` adapters, although
+query execution is not implemented yet:
 
 ```bash
 mvn package
@@ -120,6 +128,11 @@ java -jar target/plug.jar --help
 java -jar target/plug.jar --version
 java -jar target/plug.jar check examples/create-table.plug
 ```
+
+`src/main/resources/logback.xml` sets the CLI logging defaults: warnings
+and errors go to stderr, while MongoDB driver INFO/DEBUG output (cluster
+topology, connection pool, command progress) is suppressed. Script output
+on stdout is unaffected, and Logback is the only SLF4J provider bundled.
 
 For a self-contained executable that does not require Java, `jpackage`
 (JDK 17+, bundled with the JDK) produces a native launcher with a
@@ -169,7 +182,7 @@ plug.connect(driver: "mock", host: "localhost", port: 5432, database: "mydb", us
 ```
 
 An unknown driver fails with the list of registered drivers, e.g.
-`Unknown driver: mongo. Available drivers: mock, postgres, postgresql`.
+`Unknown driver: sqlite. Available drivers: mock, postgres, postgresql, mongo, mongodb`.
 
 ### plug.use(...) — select a collection
 
@@ -611,6 +624,79 @@ PLUG_PG_USER=victor PLUG_PG_PASSWORD=secret mvn test
 
 `examples/postgres.plug` is the adapter's smoke script.
 
+## MongoDB adapter (in progress)
+
+The adapter is registered under `mongo` and `mongodb`. M0 delivered the
+type contract, M1 added the connection lifecycle, and M2 adds the pure
+read compiler. Query execution, schema discovery, writes, joins,
+aggregates and `CREATE TABLE` are still not implemented and fail with
+explicit unsupported-operation errors.
+
+```plug
+plug.connect(driver: "mongo", host: "localhost", port: 27017,
+             database: "plugdb", username: "", password: "");
+plug.close();
+```
+
+- Port defaults to `5432` for every driver, so MongoDB scripts pass
+  `port: 27017` explicitly.
+- A blank username means an unauthenticated server: no credential is
+  attached. A non-blank username builds a credential for the selected
+  database, which is also its auth source (`ConnectionConfig` has no
+  separate `authSource`).
+- Client settings are built explicitly from the configured host and
+  port, with 3-second server-selection, connect, and read timeouts,
+  followed by a `ping` probe. Failures read
+  `Cannot connect to MongoDB database '<db>' at <host>:<port>: ...`,
+  matching the PostgreSQL adapter's message shape.
+- The driver logs through the bundled SLF4J/Logback stack. The default
+  configuration shows warnings and errors only, on stderr.
+- `MongoQueryCompiler` translates a validated read into a MongoDB filter,
+  projection, sort, and limit without touching a client. `EQ null` /
+  `IS NULL` match only explicitly present nulls (never missing fields),
+  `NE` excludes both null and missing, `IN` drops null items (empty or
+  all-null matches nothing), and `BETWEEN` with a null bound matches
+  nothing. `LIKE` is a whole-string, case-sensitive SQL-wildcard regex;
+  `CONTAINS` is an escaped literal substring regex. Nested `AND`/`OR`/
+  `NOT` maps to `$and`/`$or`/`$nor`, flat chains fold left-to-right, and
+  `limit(0)` is encoded as a match-nothing filter because Mongo's own
+  `limit(0)` means unbounded. The compiler is not wired into `execute()`
+  yet.
+- `close()` closes the client and is safe to call twice.
+- `CREATE DATABASE` fails with `CREATE DATABASE is not supported by the
+  MongoDB adapter. Connect to an existing database.` Other schema
+  operations and all query operations report that they are not
+  supported yet; none returns empty rows or placeholder success.
+
+Mapping rules:
+
+- `Int32` → `Integer`; `Int64` → `Integer` while every value fits the
+  int range, `Double` only while every value is exactly representable
+  (`|v| <= 2^53`), otherwise the field is omitted.
+- `Decimal128` → `Double` only when the decimal round trips exactly;
+  inexact values are omitted. `string` → `String`, `bool` → `Boolean`.
+- Unsupported BSON types (nested documents, arrays, `ObjectId`, dates,
+  binary, regex, ...) and mixed families are omitted.
+- Decoding fails closed: once a schema type is established, an
+  out-of-range or inexact stored value raises `PlugException` naming
+  the field, value, and stored class — never a rounded value.
+- Null stays null for every type; nullability is enforced by the schema,
+  not by the conversion.
+
+`MongoTypeMappingTest` covers these rules with 22 server-free unit
+tests (integer boundaries, 2^53, Decimal128 exactness, unsupported and
+mixed samples). The M1 suites (`MongoAdapterRegistrationTest`,
+`MongoConnectionSettingsTest`, 11 tests) cover both aliases, settings
+and credential construction, timeouts, the unreachable-server error,
+unsupported operations, and close idempotence — all without a live
+server. `MongoQueryCompilerTest` (28 tests) evaluates compiled filters
+against documents with MongoDB's matching rules, covering every
+operator, explicit-null versus missing fields, null-containing `IN`,
+null `BETWEEN` bounds, LIKE/CONTAINS escaping and Unicode, nested logic,
+left-to-right flat folds, projection, sorting, and limits. The full
+architecture, milestones, and documented limitations live in
+`../MONGODB_ADAPTER_PLAN.html`.
+
 ## Architecture
 
     .plug file → Lexer (+ line numbers) → Parser → AST
@@ -624,13 +710,18 @@ PLUG_PG_USER=victor PLUG_PG_PASSWORD=secret mvn test
 - `DatabaseAdapter` is the backend contract: `connect`, `execute(plan) →
   QueryResult`, `close`. Adapters return structured results and never print.
 - `DatabaseAdapterRegistry` maps driver names to adapter factories
-  (`mock`, `postgres`, `postgresql` today).
+  (`mock`, `postgres`, `postgresql`, `mongo`, `mongodb` today).
+- `MongoTypeMapping` is the MongoDB conversion layer (M0): pure
+  functions, exact-only conversions, no client or server dependency.
 - The mock adapter implements in-memory filtering, sorting, limiting,
   joins (nested-loop inner joins over its sample collections), and
   schema/type validation; it is the reference implementation for semantics.
 - The PostgreSQL adapter compiles plans to parameterized SQL through
   `PostgresQueryCompiler`, shares all schema/type/join validation with
   the mock via `QueryValidation`, and owns only the JDBC mechanics.
+- The MongoDB adapter has no execution path yet; `MongoQueryCompiler`
+  compiles validated reads to filter/projection/sort/limit documents
+  using the same shared validation and left-to-right contract.
 - DDL is typed end to end: `TableDefinition`/`FieldDefinition` in the
   AST, semantic checks in `SchemaValidation`, a `SchemaPlan` through
   `QueryPlanner.planSchema` and `ExecutionEngine.executeSchema`, and a
@@ -644,7 +735,11 @@ PLUG_PG_USER=victor PLUG_PG_PASSWORD=secret mvn test
    (EQ, NE, GT, GTE, LT, LTE, IN, CONTAINS, BETWEEN, LIKE, IS NULL/
    IS NOT NULL), and joins (`.join(collection, on: ...)`) are done.
 2. Real adapters: PostgreSQL is done (parameterized SQL over JDBC,
-   integration tests gated on `PLUG_PG_HOST`); MongoDB is next.
+   integration tests gated on `PLUG_PG_HOST`). MongoDB M0 (driver plus
+   exact BSON↔Plug type mapping), M1 (registered `mongo`/`mongodb`
+   connection lifecycle), and M2 (`MongoQueryCompiler` filters,
+   projection, sorting, limits) are done; schema resolution, execution
+   wiring, writes, joins, and aggregates are next.
 3. Foundational DDL is done: `plug.create.table(...)` compiles and
    runs on both adapters; database creation through Plug is deferred
    by decision — scripts connect to existing databases. Alter/index/

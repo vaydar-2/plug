@@ -355,9 +355,9 @@ public class RuntimeTest {
     }
 
     /*
-     * "postgres" is a real driver since the PostgreSQL
-     * adapter milestone; mongodb is the next planned one
-     * and still unregistered.
+     * "postgres" and "mongo" are real drivers since their
+     * adapter milestones; an unregistered name still reports
+     * every available driver.
      */
     @Test
     public void unknownDriverReportsAvailability() {
@@ -366,7 +366,7 @@ public class RuntimeTest {
                 assertThrows(
                         PlugException.class,
                         () -> runCaptured(
-                                "plug.connect(driver: \"mongodb\", "
+                                "plug.connect(driver: \"sqlite\", "
                                         + "host: \"localhost\", port: 27017, "
                                         + "database: \"mydb\", username: \"victor\", "
                                         + "password: \"secret\");"
@@ -374,8 +374,9 @@ public class RuntimeTest {
                 );
 
         assertEquals(
-                "Unknown driver: mongodb. "
-                        + "Available drivers: mock, postgres, postgresql",
+                "Unknown driver: sqlite. "
+                        + "Available drivers: mock, postgres, postgresql, "
+                        + "mongo, mongodb",
                 exception.getMessage()
         );
     }

@@ -13,7 +13,9 @@ plug.get(name, country)
     );
 ```
 
-Plug is pure Java (compiled for Java 17+ runtimes) with zero runtime dependencies. The language is
+Plug is pure Java (compiled for Java 17+ runtimes). The packaged executable bundles
+its database drivers — the PostgreSQL JDBC driver and the MongoDB Java sync
+driver — plus a Logback SLF4J backend, so scripts need no external classpath. The language is
 built here in `plug-language/`; this repository grows into a suite of modules
 around it (CLI, GUI, real database adapters, a custom engine, docs, website).
 
@@ -25,6 +27,7 @@ The full system is organized as independent modules:
 |-----------------------------|-------------|-------------------------------------------------------------------------|
 | `plug-language/`            | **active**  | Lexer, parser, AST, query engine, runtime, and the shared adapter contract |
 | PostgreSQL adapter (inside `runtime/`)   | **active**  | PostgreSQL implementation of the database adapter contract              |
+| MongoDB adapter (inside `runtime/`)      | **in progress** | Registered `mongo`/`mongodb`: connection lifecycle and read-query compilation; execution and schema work pending |
 | `plug-cli/`                 | planned     | Terminal application for running `.plug` files, connecting, managing commands |
 | `plug-studio/`              | planned     | Future GUI: script editor, syntax highlighting, results, connection management, debugging |
 | `plug-adapter-mongodb/`     | planned     | MongoDB implementation of the same contract                              |
@@ -58,10 +61,13 @@ bundled in-memory `mock` adapter. Status of the language itself:
 | **PostgreSQL adapter** (the first real backend) | ✅ done |
 | **PostgreSQL adapter** selections: `driver: "postgres"` / `"postgresql"` alias, schema introspection from `information_schema`, parameterized SQL, gated integration tests | ✅ done |
 | **DDL**: `plug.create.table(...) { ... }` on both adapters (database creation through Plug: **deferred by decision** — scripts connect to existing databases) | ✅ done |
-| MongoDB adapter, PlugDB, other backends | ⬜ next |
+| **MongoDB adapter foundation** (M0): sync driver dependency, `MongoTypeMapping` (exact Int64/Decimal128 rules, fail-closed decoding), 22 unit tests | ✅ done |
+| **MongoDB adapter connection layer** (M1): `mongo`/`mongodb` registered, explicit `MongoClientSettings`, optional credentials, 3 s timeouts, ping probe, PostgreSQL-style connect errors, `CREATE DATABASE` rejected, query operations rejected until implemented, 11 unit tests | ✅ done |
+| **MongoDB query compiler** (M2): explicit-null versus missing filters, all supported operators, LIKE/CONTAINS escaping, nested logic and left-to-right folding, projection/sort/limit, 28 unit tests | ✅ done |
+| MongoDB execution/schema implementation (schema resolution, execution wiring, writes, joins, aggregates, CREATE_TABLE), PlugDB, other backends | ⬜ next |
 
-Test suite: **195 tests, all green** (JUnit 5; the 5 PostgreSQL integration tests skip silently
-unless `PLUG_PG_HOST` points at a reachable server).
+Test suite: **256 tests, 0 failures** (JUnit 5; the 5 PostgreSQL integration tests
+skip silently unless `PLUG_PG_HOST` points at a reachable server, so 251 execute).
 
 ### Running the language
 
@@ -94,13 +100,21 @@ semantics, architecture) lives in [`plug-language/README.md`](plug-language/READ
   results and never print. New backends register by name in
   `DatabaseAdapterRegistry`.
 - The `mock` adapter is the reference implementation for semantics:
-  in-memory filtering, sorting, limiting, joins (planned), and schema/type
+  in-memory filtering, sorting, limiting, nested-loop joins, and schema/type
   validation.
 
 The adapter contract is what makes the module split safe: `plug-cli` only
 needs to run scripts through the runtime; the PostgreSQL and MongoDB
 adapters only need to translate an `ExecutionPlan` into backend calls;
 PlugDB hosts the runtime itself as its query engine.
+
+`MongoTypeMapping` is the MongoDB adapter's pure BSON↔Plug conversion layer
+(M0): exact `Int64`/`Decimal128` rules, unsupported values omitted, and
+fail-closed decoding. `MongoDatabaseAdapter` provides the registered
+`mongo`/`mongodb` connection lifecycle, and `MongoQueryCompiler` (M2)
+compiles validated reads into null-aware filters plus projection, sort,
+and limit documents; execution and schema work fail with explicit
+unsupported-operation errors until later milestones.
 
 ## Design principles
 
@@ -127,10 +141,12 @@ exit codes (0 success, 1 script/file failure, 2 usage error) and
 stdout/stderr separation. The legacy bare `plug <file.plug>`
 invocation via `dev.victor.plug.Main` still works unchanged. `mvn
 package` produces the runnable executable `target/plug.jar` with the
-PostgreSQL JDBC driver bundled (services entry preserved for
-`DriverManager`); jpackage commands for self-contained native
-distributions are documented in `plug-language/README.md` (the
-interactive REPL is explicitly deferred).
+PostgreSQL JDBC driver, MongoDB Java sync driver, and Logback SLF4J
+provider bundled (the JDBC and SLF4J service entries are preserved);
+logging defaults to warnings/errors on stderr, so driver INFO/DEBUG
+output does not clutter script output. jpackage commands for
+self-contained native distributions are documented in
+`plug-language/README.md` (the interactive REPL is explicitly deferred).
 
 ## Roadmap
 
@@ -143,8 +159,13 @@ interactive REPL is explicitly deferred).
    queries compile to parameterized SQL by `PostgresQueryCompiler`, with
    shared validation in `QueryValidation` so both adapters enforce the
    identical contract.
-3. MongoDB adapter, then PlugDB — a custom engine whose native language
-   *is* Plug.
+3. MongoDB adapter — **in progress**: M0 added the sync driver and exact
+   BSON↔Plug type mapping (`MongoTypeMapping`); M1 added the registered
+   `mongo`/`mongodb` connection lifecycle; M2 added the pure
+   `MongoQueryCompiler` (operators, explicit-null/missing semantics,
+   projection, sort, limit, left-to-right folding). Schema resolution,
+   execution wiring, writes, joins, and aggregates are next. Then PlugDB —
+   a custom engine whose native language *is* Plug.
 4. `plug-cli` extracts the console launcher out of `plug-language` —
    the CLI commands themselves are done and live in
    `dev.victor.plug.cli`; the module split is still open.

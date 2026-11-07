@@ -29,6 +29,13 @@ public class DatabaseAdapterRegistry {
          */
         ADAPTERS.put("postgres", PostgresDatabaseAdapter::new);
         ADAPTERS.put("postgresql", PostgresDatabaseAdapter::new);
+
+        /*
+         * MongoDB backend; "mongodb" is accepted as the
+         * spelled-out alias of "mongo".
+         */
+        ADAPTERS.put("mongo", MongoDatabaseAdapter::new);
+        ADAPTERS.put("mongodb", MongoDatabaseAdapter::new);
     }
 
     private DatabaseAdapterRegistry() {

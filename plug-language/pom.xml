@@ -10,6 +10,7 @@
 
     <properties>
         <junit.version>5.10.2</junit.version>
+        <logback.version>1.5.18</logback.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -32,6 +33,36 @@
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <version>42.7.3</version>
+        </dependency>
+
+        <!--
+            MongoDB Java sync driver: the transport dependency of
+            the mongo adapter. Compile scope, bundled by the shade
+            plugin like the PostgreSQL JDBC driver. 5.13.0 is the
+            current stable release; it supports Java 17 as a runtime
+            (the project still compiles with release 17) and MongoDB
+            server 9.0.
+        -->
+        <dependency>
+            <groupId>org.mongodb</groupId>
+            <artifactId>mongodb-driver-sync</artifactId>
+            <version>5.13.0</version>
+        </dependency>
+
+        <!--
+            Logging backend for the MongoDB driver's SLF4J facade.
+            The driver logs through SLF4J when an API is present
+            and otherwise prints a one-time "SLF4J not found" JUL
+            warning. Logback Classic 1.5.x implements SLF4J 2.x and
+            is the only provider on the runtime classpath (the
+            driver has no SLF4J dependency of its own); logback.xml
+            keeps CLI defaults at WARN. Compile scope so the shade
+            plugin bundles it in plug.jar.
+        -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>${logback.version}</version>
         </dependency>
     </dependencies>
 

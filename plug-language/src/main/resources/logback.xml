@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    CLI logging defaults for Plug.
+
+    Normal command output is written by the CLI to stdout. This
+    configuration only surfaces warnings and errors, on stderr, so
+    MongoDB driver INFO/DEBUG messages (cluster topology, connection
+    pool, command progress) do not clutter script output. Warnings
+    and errors stay enabled for both Plug and the driver.
+
+    Kept as logback.xml rather than logback-test.xml so the same
+    defaults apply to tests and the packaged jar.
+-->
+<configuration>
+
+    <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+        <target>System.err</target>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- The driver's package is org.mongodb.driver.*; WARN keeps
+         connectivity failures and server warnings visible. -->
+    <logger name="org.mongodb" level="WARN"/>
+
+    <root level="WARN">
+        <appender-ref ref="STDERR"/>
+    </root>
+
+</configuration>
