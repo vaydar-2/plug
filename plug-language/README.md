@@ -20,9 +20,10 @@ launcher reads a `.plug` file, and a pluggable adapter layer executes the
 compiled query plan. The bundled `mock` adapter runs against in-memory
 sample data; backends register themselves by name — the PostgreSQL adapter
 is already included (`driver: "postgres"`), and MongoDB is registered as
-`mongo`/`mongodb` with its connection lifecycle and read-query compiler in
-place; PlugDB (a custom database using Plug as its native query language)
-is next in line.
+`mongo`/`mongodb` with its connection lifecycle, read-query compiler,
+schema resolver, `CREATE TABLE`, and INSERT/UPDATE/DELETE in place; reads,
+joins, and aggregates are still pending, and PlugDB (a custom database
+using Plug as its native query language) is next in line.
 
 ## Running
 
@@ -626,11 +627,21 @@ PLUG_PG_USER=victor PLUG_PG_PASSWORD=secret mvn test
 
 ## MongoDB adapter (in progress)
 
+`examples/mongo.plug` is the adapter's smoke script: it connects with
+`driver: "mongo"`, creates a collection with a generated validator and
+unique partial indexes, selects it, and runs an INSERT, two UPDATEs, and
+a DELETE. Reads, joins, and aggregates are not implemented on MongoDB
+yet, so the script cannot print the stored rows. Drop the created
+collection between runs (`mongosh plugdb --eval
+'db.mongo_people.drop()'`).
+
 The adapter is registered under `mongo` and `mongodb`. M0 delivered the
-type contract, M1 added the connection lifecycle, and M2 adds the pure
-read compiler. Query execution, schema discovery, writes, joins,
-aggregates and `CREATE TABLE` are still not implemented and fail with
-explicit unsupported-operation errors.
+type contract, M1 added the connection lifecycle, M2 added the pure read
+compiler, M3 added schema resolution, M4 added `CREATE TABLE`
+(collection creation with a `$jsonSchema` validator and unique
+indexes), and M5 adds INSERT/UPDATE/DELETE. Read execution (wiring the
+compiler into `execute()`), joins, and aggregates are still not
+implemented and fail with explicit unsupported-operation errors.
 
 ```plug
 plug.connect(driver: "mongo", host: "localhost", port: 27017,
@@ -660,12 +671,65 @@ plug.close();
   `CONTAINS` is an escaped literal substring regex. Nested `AND`/`OR`/
   `NOT` maps to `$and`/`$or`/`$nor`, flat chains fold left-to-right, and
   `limit(0)` is encoded as a match-nothing filter because Mongo's own
-  `limit(0)` means unbounded. The compiler is not wired into `execute()`
-  yet.
+  `limit(0)` means unbounded. Read execution is not wired into
+  `execute()` yet; writes reuse `compileFilter`, a projection-free entry
+  point with the same filter rules.
+- `MongoSchemaResolver` determines a collection's effective Plug schema
+  in three tiers. A session-declared `TableDefinition` wins outright
+  (constraints and defaults preserved, never merged with anything);
+  otherwise a `$jsonSchema` validator is treated as the complete
+  declared schema (`_id` is storage detail and not exposed); otherwise
+  the schema is inferred from a fixed sample of 100 documents. Sampling
+  drops `_id`, unsupported BSON types, only-null fields, mixed-type
+  fields, and numerics that `MongoTypeMapping` cannot represent
+  exactly — unknown fields stay unknown. Declared and inferred schemas
+  are cached per session; declaring a schema discards any earlier
+  inference for that collection, and `close()` clears all of it.
+  Malformed validators raise `Malformed $jsonSchema validator ...`,
+  missing collections raise `Unknown collection: <name>`, and driver
+  failures are translated to `Cannot inspect`/`Cannot read MongoDB
+  collection ...`. The resolver backs DDL and writes; read execution is
+  still pending.
+- `CREATE TABLE` now runs on MongoDB. `MongoSchemaCompiler` turns the
+  validated `TableDefinition` into a strict, error-action `$jsonSchema`
+  validator (`INT`→`int`, `DECIMAL`→`double`, `STRING`→`string`,
+  `BOOL`→`bool`, `additionalProperties: false`, `_id` admitted as
+  `objectId`) and unique indexes for `PRIMARY_KEY`/`UNIQUE`. Optional
+  fields also admit `null`, matching Plug's nullable-by-default
+  contract; `REQUIRED` and `PRIMARY_KEY` fields do not. Unique indexes
+  are partial on `$type`, so null and missing values never collide
+  (numeric fields cover `int`/`long` and `double`/`decimal`).
+  `DEFAULT` is session metadata only: MongoDB validators cannot apply
+  defaults, so none is written, and the declared definition (with its
+  defaults) is registered in `MongoSchemaResolver` for INSERT. Defaults
+  therefore apply only while the declaring session is open; an INSERT
+  into the same collection from a later session resolves the validator
+  (which cannot carry defaults), so an omitted optional field becomes
+  null. Declaring a field named `_id` is rejected. Creation never
+  overwrites an existing collection, a failed index build drops the
+  new collection best-effort, and the schema is registered only after
+  every step succeeds. `CREATE DATABASE` remains explicitly rejected.
+- INSERT, UPDATE, and DELETE now run through `MongoWriteExecutor`.
+  Every write resolves the effective M3 schema and reuses
+  `QueryValidation`, so unknown fields and type mismatches fail before
+  the driver. INSERT applies declared defaults (only for fields the
+  caller omitted), requires an explicit non-null primary key (no
+  generation), enforces required fields after defaults, and stores every
+  other omitted schema field as an explicit BSON null so Plug's null
+  never means "missing". Explicit values and nulls are never replaced by
+  defaults. UPDATE sets only the supplied fields (it never applies
+  insert defaults) and returns the number of matched documents; DELETE
+  returns the deleted count. Both compile their WHERE through
+  `MongoQueryCompiler.compileFilter` and defensively reject a
+  conditionless plan, even though `Runtime` already rejects one. Driver
+  duplicate-key errors are translated to a duplicate-unique-constraint
+  error, and other failures become `INSERT/UPDATE/DELETE failed: ...`;
+  a missing connection reports `No database connection.` INSERT is
+  single-document, matching the execution plan shape.
 - `close()` closes the client and is safe to call twice.
 - `CREATE DATABASE` fails with `CREATE DATABASE is not supported by the
   MongoDB adapter. Connect to an existing database.` Other schema
-  operations and all query operations report that they are not
+  operations, READ, joins, and aggregates report that they are not
   supported yet; none returns empty rows or placeholder success.
 
 Mapping rules:
@@ -693,9 +757,28 @@ server. `MongoQueryCompilerTest` (28 tests) evaluates compiled filters
 against documents with MongoDB's matching rules, covering every
 operator, explicit-null versus missing fields, null-containing `IN`,
 null `BETWEEN` bounds, LIKE/CONTAINS escaping and Unicode, nested logic,
-left-to-right flat folds, projection, sorting, and limits. The full
-architecture, milestones, and documented limitations live in
-`../MONGODB_ADAPTER_PLAN.html`.
+left-to-right flat folds, projection, sorting, and limits.
+`MongoSchemaResolverTest` (48 tests) covers resolution precedence,
+validator types/required fields/`_id`/malformed input, the 100-document
+sample bound, mixed and missing fields, BSON type and numeric
+representability, per-collection caching, declaration invalidation,
+clearing on close, isolated resolver instances, and translated errors —
+all server-free through a collection-source double. `MongoSchemaCompilerTest`
+(17 tests) covers every validator type, nullability, required fields,
+`additionalProperties`, `_id`, defaults being metadata-only, and the
+unique partial-index definitions. `MongoSchemaWriterTest` (19 tests)
+covers collection creation with the validator attached, duplicate
+collection rejection, translated creation/index/duplicate-key errors,
+cleanup after a failed index build, registration only on success,
+preserved defaults, independent collections, validator round-tripping
+through M3, and adapter wiring. `MongoWriteExecutorTest` (29 tests) uses
+a recording store and real schema resolution to cover INSERT
+defaults/explicit nulls/required/primary-key/duplicate/type/translated
+errors, UPDATE field selection, null preservation, duplicates, missing
+WHERE, filter semantics and counts, DELETE counts, logical and null
+filters, missing WHERE, translated errors, and adapter dispatch/close —
+all server-free. The full architecture, milestones, and
+documented limitations live in `../MONGODB_ADAPTER_PLAN.html`.
 
 ## Architecture
 
@@ -719,9 +802,16 @@ architecture, milestones, and documented limitations live in
 - The PostgreSQL adapter compiles plans to parameterized SQL through
   `PostgresQueryCompiler`, shares all schema/type/join validation with
   the mock via `QueryValidation`, and owns only the JDBC mechanics.
-- The MongoDB adapter has no execution path yet; `MongoQueryCompiler`
-  compiles validated reads to filter/projection/sort/limit documents
-  using the same shared validation and left-to-right contract.
+- The MongoDB adapter executes DDL and writes but not reads;
+  `MongoQueryCompiler` compiles validated reads to
+  filter/projection/sort/limit documents (and write WHERE clauses to
+  projection-free filters) using the same shared validation and
+  left-to-right contract, `MongoSchemaResolver` supplies the collection
+  schema from a session declaration, the `$jsonSchema` validator, or a
+  bounded sample, `MongoSchemaWriter` executes `CREATE TABLE` through
+  `MongoSchemaCompiler` (validator and unique indexes), and
+  `MongoWriteExecutor` executes INSERT/UPDATE/DELETE against that
+  schema.
 - DDL is typed end to end: `TableDefinition`/`FieldDefinition` in the
   AST, semantic checks in `SchemaValidation`, a `SchemaPlan` through
   `QueryPlanner.planSchema` and `ExecutionEngine.executeSchema`, and a
@@ -737,9 +827,12 @@ architecture, milestones, and documented limitations live in
 2. Real adapters: PostgreSQL is done (parameterized SQL over JDBC,
    integration tests gated on `PLUG_PG_HOST`). MongoDB M0 (driver plus
    exact BSON↔Plug type mapping), M1 (registered `mongo`/`mongodb`
-   connection lifecycle), and M2 (`MongoQueryCompiler` filters,
-   projection, sorting, limits) are done; schema resolution, execution
-   wiring, writes, joins, and aggregates are next.
+   connection lifecycle), M2 (`MongoQueryCompiler` filters, projection,
+   sorting, limits), M3 (`MongoSchemaResolver` precedence, validator
+   parsing, bounded sampling, caching), M4 (`CREATE TABLE` with a
+   `$jsonSchema` validator and unique partial indexes), and M5
+   (INSERT/UPDATE/DELETE through `MongoWriteExecutor`) are done; read
+   execution, joins, and aggregates are next.
 3. Foundational DDL is done: `plug.create.table(...)` compiles and
    runs on both adapters; database creation through Plug is deferred
    by decision — scripts connect to existing databases. Alter/index/

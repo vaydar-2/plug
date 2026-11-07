@@ -17,11 +17,13 @@ import java.util.concurrent.TimeUnit;
 /*
  * MongoDB backend foundation.
  *
- * M1 covers the connection lifecycle only: explicit client
- * settings, the connectivity probe, close, registry entries,
- * and explicit unsupported-operation errors. Reads, writes,
- * joins, aggregates, schema discovery and CREATE_TABLE arrive
- * in later milestones; none of them silently return empty
+ * M1 covers the connection lifecycle: explicit client
+ * settings, the connectivity probe, close, and registry
+ * entries. M3 adds session schema resolution, M4 executes
+ * CREATE TABLE through MongoSchemaWriter (validator and unique
+ * indexes), and M5 executes INSERT/UPDATE/DELETE through
+ * MongoWriteExecutor. Reads, joins and aggregates arrive in
+ * later milestones; none of them silently return empty
  * results or placeholder success.
  *
  * As in the PostgreSQL adapter, this class owns driver
@@ -43,6 +45,25 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
      * database instead of re-deriving it from the config.
      */
     private MongoDatabase database;
+
+    /*
+     * Session schema state, created once the connection is
+     * usable and dropped again by close(). Package-private so
+     * lifecycle tests can install a resolver without a server.
+     */
+    MongoSchemaResolver schemaResolver;
+
+    /*
+     * CREATE TABLE executor, created with the connection and
+     * dropped by close(). Package-private for schema tests.
+     */
+    MongoSchemaWriter schemaWriter;
+
+    /*
+     * CRUD executor, created with the connection and dropped
+     * by close(). Package-private for write tests.
+     */
+    MongoWriteExecutor writeExecutor;
 
     @Override
     public void connect(ConnectionConfig config) {
@@ -68,8 +89,22 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
              */
             selected.runCommand(new Document("ping", 1));
 
+            if (schemaResolver != null) {
+                schemaResolver.clear();
+            }
+
             this.client = created;
             this.database = selected;
+            this.schemaResolver =
+                    new MongoSchemaResolver(selected);
+            this.schemaWriter = new MongoSchemaWriter(
+                    selected,
+                    this.schemaResolver
+            );
+            this.writeExecutor = new MongoWriteExecutor(
+                    selected,
+                    this.schemaResolver
+            );
 
         } catch (RuntimeException e) {
 
@@ -157,10 +192,38 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
             );
         }
 
-        throw new PlugException(
-                "MongoDB adapter does not support query "
-                        + "operations yet: " + plan.getOperation()
-        );
+        switch (plan.getOperation()) {
+
+            case INSERT:
+                requireWrites();
+                return writeExecutor.insert(plan);
+
+            case UPDATE:
+                requireWrites();
+                return writeExecutor.update(plan);
+
+            case DELETE:
+                requireWrites();
+                return writeExecutor.delete(plan);
+
+            case READ:
+            default:
+                throw new PlugException(
+                        "MongoDB adapter does not support query "
+                                + "operations yet: "
+                                + plan.getOperation()
+                );
+        }
+    }
+
+    private void requireWrites() {
+
+        if (writeExecutor == null) {
+
+            throw new PlugException(
+                    "No database connection."
+            );
+        }
     }
 
     /*
@@ -180,6 +243,19 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
 
         switch (plan.getOperation()) {
 
+            case CREATE_TABLE:
+
+                if (schemaWriter == null) {
+
+                    throw new PlugException(
+                            "No database connection."
+                    );
+                }
+
+                return schemaWriter.createTable(
+                        plan.getTable()
+                );
+
             case CREATE_DATABASE:
                 throw new PlugException(
                         "CREATE DATABASE is not supported by "
@@ -197,6 +273,14 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
 
     @Override
     public void close() {
+
+        schemaWriter = null;
+        writeExecutor = null;
+
+        if (schemaResolver != null) {
+            schemaResolver.clear();
+            schemaResolver = null;
+        }
 
         database = null;
 

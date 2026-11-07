@@ -1,0 +1,40 @@
+# MongoDB smoke script for the current adapter milestone (M5).
+#
+# Covered here: the `mongo` driver alias, the connection lifecycle,
+# CREATE TABLE (collection creation with a generated $jsonSchema
+# validator and unique partial indexes), and INSERT/UPDATE/DELETE.
+# Reads, joins and aggregates are not implemented on MongoDB yet.
+#
+# Run against a MongoDB server with:
+#   java -jar target/plug.jar run examples/mongo.plug
+#
+# The script leaves the collection behind because DDL execution only
+# creates collections. Drop it between runs with:
+#   mongosh plugdb --eval 'db.mongo_people.drop()'
+
+plug.connect(driver: "mongo", host: "localhost", port: 27017,
+             database: "plugdb", username: "", password: "");
+
+plug.create.table("mongo_people") {
+    id: INT primary_key,
+    name: STRING required,
+    email: STRING unique,
+    age: INT,
+    balance: DECIMAL default 0.0,
+    active: BOOL
+};
+
+# Registered as the session's authoritative schema, so these writes
+# resolve `mongo_people` without sampling the collection.
+plug.use("mongo_people");
+
+# Omitted optional fields are stored as explicit nulls; the omitted
+# balance picks up its DDL default.
+plug.insert(id: 1, name: "Alex", email: "alex@example.com", age: 30, active: true);
+
+plug.update(age: 31, balance: 120.5).where((id, EQ, 1));
+plug.update(active: null).where((id, EQ, 1));
+
+plug.delete().where((id, EQ, 1));
+
+plug.close();

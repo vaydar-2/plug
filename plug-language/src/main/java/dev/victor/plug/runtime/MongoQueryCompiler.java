@@ -90,22 +90,27 @@ public final class MongoQueryCompiler {
         }
     }
 
+    /*
+     * The WHERE half of a read, for write plans. UPDATE and
+     * DELETE carry no projection, so they cannot go through
+     * compileRead; the filter rules are identical.
+     */
+    public static Document compileFilter(
+            Query query,
+            Map<String, Class<?>> schema
+    ) {
+
+        requireQueryAndSchema(query, schema);
+
+        return filter(query, schema);
+    }
+
     public static CompiledQuery compileRead(
             Query query,
             Map<String, Class<?>> schema
     ) {
 
-        if (query == null) {
-            throw new PlugException(
-                    "Query is required."
-            );
-        }
-
-        if (schema == null) {
-            throw new PlugException(
-                    "Schema is required."
-            );
-        }
+        requireQueryAndSchema(query, schema);
 
         Document projection = projection(
                 query.getFields(),
@@ -132,6 +137,24 @@ public final class MongoQueryCompiler {
                 sort(query.getSort(), schema),
                 query.getLimit()
         );
+    }
+
+    private static void requireQueryAndSchema(
+            Query query,
+            Map<String, Class<?>> schema
+    ) {
+
+        if (query == null) {
+            throw new PlugException(
+                    "Query is required."
+            );
+        }
+
+        if (schema == null) {
+            throw new PlugException(
+                    "Schema is required."
+            );
+        }
     }
 
     /*

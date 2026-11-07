@@ -27,7 +27,7 @@ The full system is organized as independent modules:
 |-----------------------------|-------------|-------------------------------------------------------------------------|
 | `plug-language/`            | **active**  | Lexer, parser, AST, query engine, runtime, and the shared adapter contract |
 | PostgreSQL adapter (inside `runtime/`)   | **active**  | PostgreSQL implementation of the database adapter contract              |
-| MongoDB adapter (inside `runtime/`)      | **in progress** | Registered `mongo`/`mongodb`: connection lifecycle and read-query compilation; execution and schema work pending |
+| MongoDB adapter (inside `runtime/`)      | **in progress** | Registered `mongo`/`mongodb`: connection lifecycle, read-query compilation, schema resolution, `CREATE TABLE`, and INSERT/UPDATE/DELETE; read execution, joins, and aggregates pending |
 | `plug-cli/`                 | planned     | Terminal application for running `.plug` files, connecting, managing commands |
 | `plug-studio/`              | planned     | Future GUI: script editor, syntax highlighting, results, connection management, debugging |
 | `plug-adapter-mongodb/`     | planned     | MongoDB implementation of the same contract                              |
@@ -64,10 +64,13 @@ bundled in-memory `mock` adapter. Status of the language itself:
 | **MongoDB adapter foundation** (M0): sync driver dependency, `MongoTypeMapping` (exact Int64/Decimal128 rules, fail-closed decoding), 22 unit tests | ✅ done |
 | **MongoDB adapter connection layer** (M1): `mongo`/`mongodb` registered, explicit `MongoClientSettings`, optional credentials, 3 s timeouts, ping probe, PostgreSQL-style connect errors, `CREATE DATABASE` rejected, query operations rejected until implemented, 11 unit tests | ✅ done |
 | **MongoDB query compiler** (M2): explicit-null versus missing filters, all supported operators, LIKE/CONTAINS escaping, nested logic and left-to-right folding, projection/sort/limit, 28 unit tests | ✅ done |
-| MongoDB execution/schema implementation (schema resolution, execution wiring, writes, joins, aggregates, CREATE_TABLE), PlugDB, other backends | ⬜ next |
+| **MongoDB schema resolution** (M3): session-declared schema over `$jsonSchema` validator over a bounded 100-document sample, exact type mapping, per-collection session caching cleared on close, nullable validator unions, 48 unit tests | ✅ done |
+| **MongoDB `CREATE TABLE`** (M4): collection creation with a strict `$jsonSchema` validator, required/nullable fields, unique partial indexes, failure rollback, session schema registration, 36 unit tests | ✅ done |
+| **MongoDB writes** (M5): INSERT with declared defaults, explicit nulls, explicit primary keys and duplicate detection; UPDATE/DELETE with compiled WHERE filters, affected/deleted counts, and translated errors, 29 unit tests | ✅ done |
+| MongoDB read execution, joins and aggregates; PlugDB; other backends | ⬜ next |
 
-Test suite: **256 tests, 0 failures** (JUnit 5; the 5 PostgreSQL integration tests
-skip silently unless `PLUG_PG_HOST` points at a reachable server, so 251 execute).
+Test suite: **369 tests, 0 failures** (JUnit 5; the 5 PostgreSQL integration tests
+skip silently unless `PLUG_PG_HOST` points at a reachable server, so 364 execute).
 
 ### Running the language
 
@@ -80,6 +83,10 @@ java -cp target/classes dev.victor.plug.Main examples/test.plug
 `examples/test.plug` is the original smoke script and
 `examples/all-features.plug` exercises every implemented feature end to end
 — both are regression gates after any language change.
+`examples/mongo.plug` is the MongoDB smoke script: it connects to
+`localhost:27017`, creates a collection with a validator and unique
+indexes, selects it, and exercises INSERT/UPDATE/DELETE (reads, joins,
+and aggregates on MongoDB are not implemented yet).
 
 Errors go to stderr with the process exiting 1. Parse and lexer errors carry
 line numbers, e.g. `Error: line 3: Expected a value.`
@@ -111,10 +118,14 @@ PlugDB hosts the runtime itself as its query engine.
 `MongoTypeMapping` is the MongoDB adapter's pure BSON↔Plug conversion layer
 (M0): exact `Int64`/`Decimal128` rules, unsupported values omitted, and
 fail-closed decoding. `MongoDatabaseAdapter` provides the registered
-`mongo`/`mongodb` connection lifecycle, and `MongoQueryCompiler` (M2)
+`mongo`/`mongodb` connection lifecycle, `MongoQueryCompiler` (M2)
 compiles validated reads into null-aware filters plus projection, sort,
-and limit documents; execution and schema work fail with explicit
-unsupported-operation errors until later milestones.
+and limit documents, `MongoSchemaResolver` (M3) resolves collection
+schemas from a session declaration, the `$jsonSchema` validator, or a
+bounded 100-document sample, and `MongoSchemaWriter` (M4) creates
+collections with generated validators and unique partial indexes;
+query execution fails with explicit unsupported-operation errors until
+the next milestone.
 
 ## Design principles
 
@@ -163,9 +174,14 @@ self-contained native distributions are documented in
    BSON↔Plug type mapping (`MongoTypeMapping`); M1 added the registered
    `mongo`/`mongodb` connection lifecycle; M2 added the pure
    `MongoQueryCompiler` (operators, explicit-null/missing semantics,
-   projection, sort, limit, left-to-right folding). Schema resolution,
-   execution wiring, writes, joins, and aggregates are next. Then PlugDB —
-   a custom engine whose native language *is* Plug.
+   projection, sort, limit, left-to-right folding); M3 added
+   `MongoSchemaResolver` (session declaration, `$jsonSchema` validator,
+   bounded sampling, caching); M4 added `CREATE TABLE` (validator and
+   unique partial indexes, failure rollback, schema registration); and
+   M5 added INSERT/UPDATE/DELETE (`MongoWriteExecutor`) with declared
+   defaults, explicit nulls, compiled WHERE filters, counts, and
+   translated errors. Read execution, joins, and aggregates are next.
+   Then PlugDB — a custom engine whose native language *is* Plug.
 4. `plug-cli` extracts the console launcher out of `plug-language` —
    the CLI commands themselves are done and live in
    `dev.victor.plug.cli`; the module split is still open.
