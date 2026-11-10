@@ -1,16 +1,18 @@
-# MongoDB smoke script for the current adapter milestone (M5).
+# MongoDB smoke script for the current adapter milestone (M7).
 #
 # Covered here: the `mongo` driver alias, the connection lifecycle,
 # CREATE TABLE (collection creation with a generated $jsonSchema
-# validator and unique partial indexes), and INSERT/UPDATE/DELETE.
-# Reads, joins and aggregates are not implemented on MongoDB yet.
+# validator and unique partial indexes), INSERT/UPDATE/DELETE, a
+# joined read compiled to $lookup/$unwind, and COUNT/SUM/AVG/MIN/MAX
+# compiled to $match plus $group. Plain reads are not implemented on
+# MongoDB yet.
 #
 # Run against a MongoDB server with:
 #   java -jar target/plug.jar run examples/mongo.plug
 #
-# The script leaves the collection behind because DDL execution only
-# creates collections. Drop it between runs with:
-#   mongosh plugdb --eval 'db.mongo_people.drop()'
+# The script leaves the collections behind because DDL execution only
+# creates collections. Drop them between runs with:
+#   mongosh plugdb --eval 'db.mongo_people.drop(); db.mongo_orders.drop()'
 
 plug.connect(driver: "mongo", host: "localhost", port: 27017,
              database: "plugdb", username: "", password: "");
@@ -24,16 +26,41 @@ plug.create.table("mongo_people") {
     active: BOOL
 };
 
-# Registered as the session's authoritative schema, so these writes
-# resolve `mongo_people` without sampling the collection.
+plug.create.table("mongo_orders") {
+    id: INT primary_key,
+    person_id: INT,
+    total: DECIMAL
+};
+
+# Registered as the session's authoritative schemas, so these
+# statements resolve the collections without sampling.
 plug.use("mongo_people");
 
 # Omitted optional fields are stored as explicit nulls; the omitted
 # balance picks up its DDL default.
 plug.insert(id: 1, name: "Alex", email: "alex@example.com", age: 30, active: true);
 
+plug.use("mongo_orders");
+plug.insert(id: 1, person_id: 1, total: 25.0);
+plug.insert(id: 2, person_id: 1, total: 75.5);
+
+plug.use("mongo_people");
 plug.update(age: 31, balance: 120.5).where((id, EQ, 1));
 plug.update(active: null).where((id, EQ, 1));
+
+# Inner join across the two collections. The null/missing key guards
+# mean an order with no person_id would not appear.
+plug.get(name, mongo_orders.total)
+    .join(mongo_orders, on: (mongo_people.id, EQ, mongo_orders.person_id))
+    .sort(mongo_orders.total, ASC);
+
+# Aggregates scope their WHERE with $match, then fold with $group.
+plug.get().count();
+plug.get().where((age, GTE, 30)).count();
+plug.get().sum(balance);
+plug.get().avg(age);
+plug.get().min(age);
+plug.get().max(balance);
 
 plug.delete().where((id, EQ, 1));
 

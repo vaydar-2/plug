@@ -91,6 +91,18 @@ public final class MongoQueryCompiler {
     }
 
     /*
+     * A joined read stores collections under internal aliases,
+     * so the logical field in a condition ("orders.total")
+     * must map to a physical aggregation path
+     * ("__join_0.total"). The resolver also validates the
+     * logical name; filter semantics stay exactly the same.
+     */
+    interface FieldPathResolver {
+
+        String path(String field);
+    }
+
+    /*
      * The WHERE half of a read, for write plans. UPDATE and
      * DELETE carry no projection, so they cannot go through
      * compileRead; the filter rules are identical.
@@ -102,7 +114,31 @@ public final class MongoQueryCompiler {
 
         requireQueryAndSchema(query, schema);
 
-        return filter(query, schema);
+        return filter(query, schemaResolver(schema));
+    }
+
+    /*
+     * Joined-read entry point: the caller has already resolved
+     * the logical field to its physical aggregation path.
+     */
+    static Document compileFilter(
+            Query query,
+            FieldPathResolver paths
+    ) {
+
+        if (query == null) {
+            throw new PlugException(
+                    "Query is required."
+            );
+        }
+
+        if (paths == null) {
+            throw new PlugException(
+                    "Field paths are required."
+            );
+        }
+
+        return filter(query, paths);
     }
 
     public static CompiledQuery compileRead(
@@ -117,7 +153,10 @@ public final class MongoQueryCompiler {
                 schema
         );
 
-        Document filter = filter(query, schema);
+        Document filter = filter(
+                query,
+                schemaResolver(schema)
+        );
 
         /*
          * Mongo's limit(0) means "no limit", while Plug's
@@ -163,9 +202,19 @@ public final class MongoQueryCompiler {
      * condition wraps the accumulated side, which preserves the
      * left-to-right fold exactly as the mock evaluates it.
      */
+    private static FieldPathResolver schemaResolver(
+            Map<String, Class<?>> schema
+    ) {
+
+        return field -> {
+            requireField(field, schema);
+            return field;
+        };
+    }
+
     private static Document filter(
             Query query,
-            Map<String, Class<?>> schema
+            FieldPathResolver paths
     ) {
 
         ConditionExpression expression =
@@ -184,12 +233,12 @@ public final class MongoQueryCompiler {
 
         if (expression != null) {
 
-            compiled = expression(expression, schema);
+            compiled = expression(expression, paths);
             startIndex = 0;
 
         } else {
 
-            compiled = condition(conditions.get(0), schema);
+            compiled = condition(conditions.get(0), paths);
             startIndex = 1;
         }
 
@@ -206,7 +255,7 @@ public final class MongoQueryCompiler {
                             : "$or",
                     Arrays.asList(
                             compiled,
-                            condition(current, schema)
+                            condition(current, paths)
                     )
             );
         }
@@ -216,7 +265,7 @@ public final class MongoQueryCompiler {
 
     private static Document expression(
             ConditionExpression expression,
-            Map<String, Class<?>> schema
+            FieldPathResolver paths
     ) {
 
         if (expression instanceof ComparisonExpression) {
@@ -231,7 +280,7 @@ public final class MongoQueryCompiler {
                             comparison.getValue(),
                             Condition.LogicalOperator.AND
                     ),
-                    schema
+                    paths
             );
         }
 
@@ -246,8 +295,8 @@ public final class MongoQueryCompiler {
                             ? "$and"
                             : "$or",
                     Arrays.asList(
-                            expression(logical.getLeft(), schema),
-                            expression(logical.getRight(), schema)
+                            expression(logical.getLeft(), paths),
+                            expression(logical.getRight(), paths)
                     )
             );
         }
@@ -260,7 +309,7 @@ public final class MongoQueryCompiler {
                             expression(
                                     ((NotExpression) expression)
                                             .getExpression(),
-                                    schema
+                                    paths
                             )
                     )
             );
@@ -273,12 +322,12 @@ public final class MongoQueryCompiler {
 
     private static Document condition(
             Condition condition,
-            Map<String, Class<?>> schema
+            FieldPathResolver paths
     ) {
 
-        String field = condition.getField();
-
-        requireField(field, schema);
+        String field = paths.path(
+                condition.getField()
+        );
 
         Object expected = condition.getValue() == null
                 ? null

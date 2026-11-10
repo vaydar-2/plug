@@ -21,9 +21,11 @@ import java.util.concurrent.TimeUnit;
  * settings, the connectivity probe, close, and registry
  * entries. M3 adds session schema resolution, M4 executes
  * CREATE TABLE through MongoSchemaWriter (validator and unique
- * indexes), and M5 executes INSERT/UPDATE/DELETE through
- * MongoWriteExecutor. Reads, joins and aggregates arrive in
- * later milestones; none of them silently return empty
+ * indexes), M5 executes INSERT/UPDATE/DELETE through
+ * MongoWriteExecutor, M6 executes joined reads through
+ * MongoJoinExecutor, and M7 executes COUNT/SUM/AVG/MIN/MAX
+ * through MongoAggregateExecutor. Plain reads still arrive in
+ * a later milestone; none of them silently return empty
  * results or placeholder success.
  *
  * As in the PostgreSQL adapter, this class owns driver
@@ -65,6 +67,18 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
      */
     MongoWriteExecutor writeExecutor;
 
+    /*
+     * Joined-read executor, created with the connection and
+     * dropped by close(). Package-private for join tests.
+     */
+    MongoJoinExecutor joinExecutor;
+
+    /*
+     * Aggregate-read executor, created with the connection and
+     * dropped by close(). Package-private for aggregate tests.
+     */
+    MongoAggregateExecutor aggregateExecutor;
+
     @Override
     public void connect(ConnectionConfig config) {
 
@@ -102,6 +116,14 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
                     this.schemaResolver
             );
             this.writeExecutor = new MongoWriteExecutor(
+                    selected,
+                    this.schemaResolver
+            );
+            this.joinExecutor = new MongoJoinExecutor(
+                    selected,
+                    this.schemaResolver
+            );
+            this.aggregateExecutor = new MongoAggregateExecutor(
                     selected,
                     this.schemaResolver
             );
@@ -207,13 +229,69 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
                 return writeExecutor.delete(plan);
 
             case READ:
+
+                if (plan.getQuery() == null) {
+                    throw unsupportedRead();
+                }
+
+                if (plan.getAggregate() != null
+                        && plan.getAggregate()
+                        != ExecutionPlan.Aggregate.NONE) {
+
+                    if (!plan.getQuery()
+                            .getJoins()
+                            .isEmpty()) {
+
+                        throw new PlugException(
+                                "An aggregate cannot be combined "
+                                        + "with join()."
+                        );
+                    }
+
+                    requireAggregates();
+
+                    return aggregateExecutor.execute(plan);
+                }
+
+                if (plan.getQuery().getJoins().isEmpty()) {
+                    throw unsupportedRead();
+                }
+
+                requireReads();
+
+                return joinExecutor.execute(plan);
+
             default:
-                throw new PlugException(
-                        "MongoDB adapter does not support query "
-                                + "operations yet: "
-                                + plan.getOperation()
-                );
+                throw unsupportedRead();
         }
+    }
+
+    private void requireReads() {
+
+        if (joinExecutor == null) {
+
+            throw new PlugException(
+                    "No database connection."
+            );
+        }
+    }
+
+    private void requireAggregates() {
+
+        if (aggregateExecutor == null) {
+
+            throw new PlugException(
+                    "No database connection."
+            );
+        }
+    }
+
+    private static PlugException unsupportedRead() {
+
+        return new PlugException(
+                "MongoDB adapter does not support query "
+                        + "operations yet: READ"
+        );
     }
 
     private void requireWrites() {
@@ -276,6 +354,8 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
 
         schemaWriter = null;
         writeExecutor = null;
+        joinExecutor = null;
+        aggregateExecutor = null;
 
         if (schemaResolver != null) {
             schemaResolver.clear();

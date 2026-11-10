@@ -27,7 +27,7 @@ The full system is organized as independent modules:
 |-----------------------------|-------------|-------------------------------------------------------------------------|
 | `plug-language/`            | **active**  | Lexer, parser, AST, query engine, runtime, and the shared adapter contract |
 | PostgreSQL adapter (inside `runtime/`)   | **active**  | PostgreSQL implementation of the database adapter contract              |
-| MongoDB adapter (inside `runtime/`)      | **in progress** | Registered `mongo`/`mongodb`: connection lifecycle, read-query compilation, schema resolution, `CREATE TABLE`, and INSERT/UPDATE/DELETE; read execution, joins, and aggregates pending |
+| MongoDB adapter (inside `runtime/`)      | **in progress** | Registered `mongo`/`mongodb`: connection lifecycle, read-query compilation, schema resolution, `CREATE TABLE`, INSERT/UPDATE/DELETE, joined reads, and aggregates; plain reads pending |
 | `plug-cli/`                 | planned     | Terminal application for running `.plug` files, connecting, managing commands |
 | `plug-studio/`              | planned     | Future GUI: script editor, syntax highlighting, results, connection management, debugging |
 | `plug-adapter-mongodb/`     | planned     | MongoDB implementation of the same contract                              |
@@ -67,10 +67,14 @@ bundled in-memory `mock` adapter. Status of the language itself:
 | **MongoDB schema resolution** (M3): session-declared schema over `$jsonSchema` validator over a bounded 100-document sample, exact type mapping, per-collection session caching cleared on close, nullable validator unions, 48 unit tests | ✅ done |
 | **MongoDB `CREATE TABLE`** (M4): collection creation with a strict `$jsonSchema` validator, required/nullable fields, unique partial indexes, failure rollback, session schema registration, 36 unit tests | ✅ done |
 | **MongoDB writes** (M5): INSERT with declared defaults, explicit nulls, explicit primary keys and duplicate detection; UPDATE/DELETE with compiled WHERE filters, affected/deleted counts, and translated errors, 29 unit tests | ✅ done |
-| MongoDB read execution, joins and aggregates; PlugDB; other backends | ⬜ next |
+| **MongoDB joins** (M6): inner joins compiled to `$lookup`/`$unwind`, null/missing key guards on both sides, one combined post-join WHERE, alias collision avoidance, projection/sort/limit, 30 unit tests plus a gated live test | ✅ done |
+| **MongoDB aggregates** (M7): COUNT/SUM/AVG/MIN/MAX compiled to one WHERE `$match` plus `$group`, SQL empty/null semantics, exact BSON result conversion with explicit overflow failures, 32 unit tests plus a gated live test | ✅ done |
+| MongoDB plain reads; PlugDB; other backends | ⬜ next |
 
-Test suite: **369 tests, 0 failures** (JUnit 5; the 5 PostgreSQL integration tests
-skip silently unless `PLUG_PG_HOST` points at a reachable server, so 364 execute).
+Test suite: **433 tests, 0 failures** (JUnit 5; the 5 PostgreSQL integration
+tests, 1 MongoDB join integration test, and 1 MongoDB aggregate integration
+test skip silently unless `PLUG_PG_HOST`/`PLUG_MONGO_HOST` point at reachable
+servers, so 426 execute).
 
 ### Running the language
 
@@ -84,9 +88,9 @@ java -cp target/classes dev.victor.plug.Main examples/test.plug
 `examples/all-features.plug` exercises every implemented feature end to end
 — both are regression gates after any language change.
 `examples/mongo.plug` is the MongoDB smoke script: it connects to
-`localhost:27017`, creates a collection with a validator and unique
-indexes, selects it, and exercises INSERT/UPDATE/DELETE (reads, joins,
-and aggregates on MongoDB are not implemented yet).
+`localhost:27017`, creates two collections with validators and unique
+indexes, exercises INSERT/UPDATE/DELETE, prints an inner join, and runs
+all five aggregates (plain reads on MongoDB are not implemented yet).
 
 Errors go to stderr with the process exiting 1. Parse and lexer errors carry
 line numbers, e.g. `Error: line 3: Expected a value.`
@@ -122,10 +126,16 @@ fail-closed decoding. `MongoDatabaseAdapter` provides the registered
 compiles validated reads into null-aware filters plus projection, sort,
 and limit documents, `MongoSchemaResolver` (M3) resolves collection
 schemas from a session declaration, the `$jsonSchema` validator, or a
-bounded 100-document sample, and `MongoSchemaWriter` (M4) creates
-collections with generated validators and unique partial indexes;
-query execution fails with explicit unsupported-operation errors until
-the next milestone.
+bounded 100-document sample, `MongoSchemaWriter` (M4) creates collections
+with generated validators and unique partial indexes, and
+`MongoWriteExecutor` (M5) runs INSERT/UPDATE/DELETE. M6 adds
+`MongoJoinCompiler`/`MongoJoinExecutor`: inner joins become
+`$lookup`/`$unwind` with null/missing key guards, followed by one
+combined WHERE, projection, sort, and limit. M7 adds
+`MongoAggregateCompiler`/`MongoAggregateExecutor`: COUNT/SUM/AVG/MIN/MAX
+become one WHERE `$match` followed by `$group`, with SQL-compatible
+empty and null results and exact BSON decoding. Plain reads still fail
+with an explicit unsupported-operation error.
 
 ## Design principles
 
@@ -180,7 +190,13 @@ self-contained native distributions are documented in
    unique partial indexes, failure rollback, schema registration); and
    M5 added INSERT/UPDATE/DELETE (`MongoWriteExecutor`) with declared
    defaults, explicit nulls, compiled WHERE filters, counts, and
-   translated errors. Read execution, joins, and aggregates are next.
+   translated errors; M6 added joined reads
+   (`MongoJoinCompiler`/`MongoJoinExecutor`) with `$lookup`/`$unwind`,
+   both-side null/missing key guards, a combined post-join filter, and
+   projection/sort/limit; and M7 added COUNT/SUM/AVG/MIN/MAX
+   (`MongoAggregateCompiler`/`MongoAggregateExecutor`) with one WHERE
+   `$match`, `$group`, SQL empty/null semantics, and exact numeric
+   results. Plain read execution is next.
    Then PlugDB — a custom engine whose native language *is* Plug.
 4. `plug-cli` extracts the console launcher out of `plug-language` —
    the CLI commands themselves are done and live in
