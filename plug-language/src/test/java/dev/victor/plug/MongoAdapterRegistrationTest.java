@@ -99,7 +99,7 @@ public class MongoAdapterRegistrationTest {
     }
 
     @Test
-    public void queryOperationsAreRejectedUntilImplemented() {
+    public void readOperationsRequireAConnection() {
 
         MongoDatabaseAdapter adapter =
                 new MongoDatabaseAdapter();
@@ -114,10 +114,8 @@ public class MongoAdapterRegistrationTest {
                 () -> adapter.execute(plan)
         );
 
-        assertTrue(
-                exception.getMessage().contains(
-                        "does not support query operations yet"
-                ),
+        assertEquals(
+                "No database connection.",
                 exception.getMessage()
         );
     }

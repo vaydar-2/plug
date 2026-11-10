@@ -23,14 +23,15 @@ import java.util.concurrent.TimeUnit;
  * CREATE TABLE through MongoSchemaWriter (validator and unique
  * indexes), M5 executes INSERT/UPDATE/DELETE through
  * MongoWriteExecutor, M6 executes joined reads through
- * MongoJoinExecutor, and M7 executes COUNT/SUM/AVG/MIN/MAX
- * through MongoAggregateExecutor. Plain reads still arrive in
- * a later milestone; none of them silently return empty
- * results or placeholder success.
+ * MongoJoinExecutor, M7 executes COUNT/SUM/AVG/MIN/MAX
+ * through MongoAggregateExecutor, and M8 executes ordinary
+ * reads through MongoReadExecutor. Every supported query
+ * shape has an explicit dispatch path; none silently returns
+ * empty results or placeholder success.
  *
  * As in the PostgreSQL adapter, this class owns driver
  * mechanics only. Query-shaped rules stay in the shared
- * validation and (future) compiler layers.
+ * validation and compiler layers.
  */
 public class MongoDatabaseAdapter implements DatabaseAdapter {
 
@@ -79,6 +80,12 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
      */
     MongoAggregateExecutor aggregateExecutor;
 
+    /*
+     * Plain-read executor, created with the connection and
+     * dropped by close(). Package-private for read tests.
+     */
+    MongoReadExecutor readExecutor;
+
     @Override
     public void connect(ConnectionConfig config) {
 
@@ -124,6 +131,10 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
                     this.schemaResolver
             );
             this.aggregateExecutor = new MongoAggregateExecutor(
+                    selected,
+                    this.schemaResolver
+            );
+            this.readExecutor = new MongoReadExecutor(
                     selected,
                     this.schemaResolver
             );
@@ -231,7 +242,10 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
             case READ:
 
                 if (plan.getQuery() == null) {
-                    throw unsupportedRead();
+                    throw new PlugException(
+                            "Execution plan and query are "
+                                    + "required."
+                    );
                 }
 
                 if (plan.getAggregate() != null
@@ -254,7 +268,10 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
                 }
 
                 if (plan.getQuery().getJoins().isEmpty()) {
-                    throw unsupportedRead();
+
+                    requirePlainReads();
+
+                    return readExecutor.execute(plan);
                 }
 
                 requireReads();
@@ -262,7 +279,20 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
                 return joinExecutor.execute(plan);
 
             default:
-                throw unsupportedRead();
+                throw new PlugException(
+                        "Unsupported operation: "
+                                + plan.getOperation()
+                );
+        }
+    }
+
+    private void requirePlainReads() {
+
+        if (readExecutor == null) {
+
+            throw new PlugException(
+                    "No database connection."
+            );
         }
     }
 
@@ -284,14 +314,6 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
                     "No database connection."
             );
         }
-    }
-
-    private static PlugException unsupportedRead() {
-
-        return new PlugException(
-                "MongoDB adapter does not support query "
-                        + "operations yet: READ"
-        );
     }
 
     private void requireWrites() {
@@ -356,6 +378,7 @@ public class MongoDatabaseAdapter implements DatabaseAdapter {
         writeExecutor = null;
         joinExecutor = null;
         aggregateExecutor = null;
+        readExecutor = null;
 
         if (schemaResolver != null) {
             schemaResolver.clear();

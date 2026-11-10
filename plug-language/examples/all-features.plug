@@ -1,5 +1,5 @@
-# Full feature walkthrough for Plug (as of the write-features milestone).
-# Run with: java -cp target/classes dev.victor.plug.Main examples/all-features.plug
+# Full feature walkthrough for Plug.
+# Run with: java -jar target/plug.jar run examples/all-features.plug
 # Everything here is a happy path: a section that still prints correct
 # counts after a language change is a regression in defense-in-depth.
 
@@ -65,6 +65,9 @@ plug.get(name, balance)
     .where((country, EQ, "Ghana"))
     .sort(balance, DESC)
     .limit(3);
+
+# limit(0) is a valid empty result, not an unbounded query:
+plug.get(name).where((country, EQ, "Ghana")).limit(0);
 
 # ----------------------------------------------------------------- reads: joins
 # Users joined with orders: inner join, dotted projection keys, a
@@ -132,5 +135,44 @@ plug.get(name).where((id, IN, [100, 101]));
 
 # Clean up the record inserted this run so remaining data stays intact:
 plug.delete().where((name, EQ, "Kwame"));
+
+# ------------------------------------------------------- DDL: database + tables
+# A scoped database (mock and PostgreSQL; MongoDB rejects CREATE DATABASE):
+plug.create.database("plug_features");
+
+# Every supported type and constraint, including defaults:
+plug.create.table("example_products") {
+    id: INT primary_key,
+    name: STRING required,
+    category: STRING unique,
+    price: DECIMAL default 9.99,
+    active: BOOL default true
+};
+
+plug.create.table("example_restocks") {
+    id: INT primary_key,
+    product_id: INT required,
+    units: INT default 10,
+    note: STRING default "routine"
+};
+
+# Omitted fields pick up their table defaults:
+plug.use("example_products");
+plug.insert(name: "Laptop", category: "electronics", price: 450.0);
+plug.insert(name: "Book", category: "media");
+plug.get(id, name, price, active).sort(id, ASC);
+
+# The new tables join and aggregate like any other collection:
+plug.use("example_restocks");
+plug.insert(product_id: 1, units: 5, note: "resupply");
+plug.insert(product_id: 2);
+
+plug.get(example_products.name, example_restocks.units, example_restocks.note)
+    .join(example_products, on: (example_restocks.product_id, EQ, example_products.id))
+    .where((example_restocks.units, GTE, 10))
+    .sort(example_restocks.units, DESC);
+
+plug.get().count();
+plug.get().sum(units);
 
 plug.close();

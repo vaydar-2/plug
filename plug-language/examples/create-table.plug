@@ -1,7 +1,8 @@
 # DDL walkthrough: creating a table, inserting records, and
-# querying them — same statements work unchanged against a
-# PostgreSQL server (just change the driver).
-# Run with: java -cp target/classes dev.victor.plug.Main examples/create-table.plug
+# querying them. The same statements work unchanged against a fresh
+# PostgreSQL database (just change the connection details); MongoDB
+# differs, so see examples/mongo.plug for its explicit primary keys.
+# Run with: java -jar target/plug.jar run examples/create-table.plug
 
 plug.connect(driver: "mock", host: "localhost", port: 5432, database: "mydb", username: "victor", password: "secret");
 

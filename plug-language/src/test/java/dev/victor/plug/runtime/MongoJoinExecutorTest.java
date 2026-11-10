@@ -457,11 +457,10 @@ public class MongoJoinExecutorTest {
     }
 
     @Test
-    void adapterStillRejectsPlainRead() {
+    void adapterDispatchesPlainReadToTheReadExecutorConnectionCheck() {
 
         assertEquals(
-                "MongoDB adapter does not support query "
-                        + "operations yet: READ",
+                "No database connection.",
                 assertThrows(
                         PlugException.class,
                         () -> new MongoDatabaseAdapter().execute(

@@ -1,11 +1,12 @@
-# MongoDB smoke script for the current adapter milestone (M7).
+# MongoDB smoke script for the completed adapter (through M8).
 #
 # Covered here: the `mongo` driver alias, the connection lifecycle,
 # CREATE TABLE (collection creation with a generated $jsonSchema
-# validator and unique partial indexes), INSERT/UPDATE/DELETE, a
-# joined read compiled to $lookup/$unwind, and COUNT/SUM/AVG/MIN/MAX
-# compiled to $match plus $group. Plain reads are not implemented on
-# MongoDB yet.
+# validator and unique partial indexes), INSERT/UPDATE/DELETE, an
+# ordinary find() read with filter/projection/sort/limit, a joined
+# read compiled to $lookup/$unwind, and COUNT/SUM/AVG/MIN/MAX
+# compiled to $match plus $group. MongoDB requires explicit primary
+# keys, so every INSERT below supplies its id.
 #
 # Run against a MongoDB server with:
 #   java -jar target/plug.jar run examples/mongo.plug
@@ -47,6 +48,16 @@ plug.insert(id: 2, person_id: 1, total: 75.5);
 plug.use("mongo_people");
 plug.update(age: 31, balance: 120.5).where((id, EQ, 1));
 plug.update(active: null).where((id, EQ, 1));
+
+# Ordinary read: the compiled filter, projection, sort and limit run
+# through MongoDB find(), with limit(0) handled before the driver.
+plug.get(name, age, balance)
+    .where((age, GTE, 30))
+    .sort(balance, DESC)
+    .limit(1);
+
+# limit(0) returns no rows and is handled before the driver call.
+plug.get(name).limit(0);
 
 # Inner join across the two collections. The null/missing key guards
 # mean an order with no person_id would not appear.

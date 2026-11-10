@@ -27,10 +27,53 @@ plug.get(name).where((name, CONTAINS, "li"));
 plug.get(name).where((age, GT, 18));
 plug.get(name).where((balance, LT, -1));
 
+plug.get(name).where((age, BETWEEN, [18, 20]));
+plug.get(name).where((name, BETWEEN, ["Brian", "Chris"]));
+
+plug.get(name).where((name, LIKE, "_ictor"));
+plug.get(name).where((email, LIKE, "%@outlook.com"));
+
+plug.get(name).where((email, IS NULL));
+plug.get(name).where((email, IS NOT NULL));
+plug.get(name).where((email, IS, null));
+plug.get(name).where((email, IS NULL) OR (age, GT, 30));
+
 plug.get(name, balance)
     .where((country, EQ, "Ghana"))
     .sort(balance, DESC)
     .limit(3);
+
+plug.get(name).where((country, EQ, "Ghana")).limit(0);
+
+plug.get(name, orders.total)
+    .join(orders, on: (users.id, EQ, orders.user_id))
+    .where((country, EQ, "Ghana"))
+    .sort(orders.total, DESC)
+    .limit(3);
+
+plug.get(name, total)
+    .join(orders, on: (users.id, EQ, orders.user_id))
+    .where((total, BETWEEN, [100, 500]));
+
+plug.get(name, orders.product)
+    .join(orders, on: (orders.user_id, EQ, users.id))
+    .where((orders.total, GTE, 400));
+
+plug.get(users.name, inventory.product, inventory.stock)
+    .join(orders, on: (users.id, EQ, orders.user_id))
+    .join(inventory, on: (orders.id, EQ, inventory.order_id));
+
+plug.get(name).count();
+plug.get().where((country, EQ, "Ghana")).count();
+
+plug.get().sum(balance);
+plug.get().avg(balance);
+plug.get().min(age);
+plug.get().max(balance);
+plug.get().min(name);
+
+plug.get().where((balance, LT, -1)).count();
+plug.get().where((balance, LT, -1)).sum(balance);
 
 plug.insert(name: "Kwame", age: 22, email: "kwame@gmail.com", balance: 500, active: true, country: "Ghana", role: "student");
 plug.get(id).where((name, EQ, "Kwame"));
@@ -49,5 +92,39 @@ plug.delete().where((id, IN, [100, 101]));
 plug.get(name).where((id, IN, [100, 101]));
 
 plug.delete().where((name, EQ, "Kwame"));
+
+plug.create.database("plug_features");
+
+plug.create.table("example_products") {
+    id: INT primary_key,
+    name: STRING required,
+    category: STRING unique,
+    price: DECIMAL default 9.99,
+    active: BOOL default true
+};
+
+plug.create.table("example_restocks") {
+    id: INT primary_key,
+    product_id: INT required,
+    units: INT default 10,
+    note: STRING default "routine"
+};
+
+plug.use("example_products");
+plug.insert(name: "Laptop", category: "electronics", price: 450.0);
+plug.insert(name: "Book", category: "media");
+plug.get(id, name, price, active).sort(id, ASC);
+
+plug.use("example_restocks");
+plug.insert(product_id: 1, units: 5, note: "resupply");
+plug.insert(product_id: 2);
+
+plug.get(example_products.name, example_restocks.units, example_restocks.note)
+    .join(example_products, on: (example_restocks.product_id, EQ, example_products.id))
+    .where((example_restocks.units, GTE, 10))
+    .sort(example_restocks.units, DESC);
+
+plug.get().count();
+plug.get().sum(units);
 
 plug.close();

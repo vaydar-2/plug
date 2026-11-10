@@ -605,7 +605,7 @@ public class MongoAggregateExecutorTest {
     }
 
     @Test
-    void adapterStillRejectsPlainReads() {
+    void adapterPlainReadsNeedTheirOwnExecutor() {
 
         MongoDatabaseAdapter adapter = new MongoDatabaseAdapter();
 
@@ -616,8 +616,7 @@ public class MongoAggregateExecutorTest {
         );
 
         assertEquals(
-                "MongoDB adapter does not support query "
-                        + "operations yet: READ",
+                "No database connection.",
                 assertThrows(
                         PlugException.class,
                         () -> adapter.execute(

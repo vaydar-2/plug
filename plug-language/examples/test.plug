@@ -1,3 +1,6 @@
+# Minimal mock smoke script used by the README.
+# Run with: java -jar target/plug.jar run examples/test.plug
+
 plug.connect(
     host: "localhost",
     port: 5432,

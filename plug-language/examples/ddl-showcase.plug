@@ -1,14 +1,16 @@
-# DDL showcase: the new schema features put to work.
-# Run with: java -cp target/classes dev.victor.plug.Main examples/ddl-showcase.plug
-# The same script runs unchanged against a real PostgreSQL server —
+# DDL showcase: schema definition, defaults and joins in one script.
+# Run with: java -jar target/plug.jar run examples/ddl-showcase.plug
+# The same script runs unchanged against a fresh PostgreSQL database —
 # just switch the driver to "postgres" (create.database then runs on its
 # own administrative connection to the server's `postgres` database).
+# MongoDB rejects create.database, so use examples/mongo.plug for Mongo.
 
 # ------------------------------------------------------------------ connect
 plug.connect(driver: "mock", host: "localhost", port: 5432, database: "mydb", username: "victor", password: "secret");
 
 # --------------------------------------------------------- create a database
-# New in the DDL milestone — a scoped database of its own:
+# Creates a separate database on the server; the statements below still
+# run against the database selected by plug.connect(...).
 plug.create.database("shop");
 
 
