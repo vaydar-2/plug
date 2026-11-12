@@ -5,7 +5,7 @@
 # Run with: java -jar target/plug.jar run examples/postgres.plug
 
 # ----------------------------------------------------------------- connect
-plug.connect(driver: "postgres", host: "localhost", port: 5432, database: "plugdb", username: "postgres", password: "change-me");
+plug.connect(driver: "postgres", host: "localhost", port: 5432, database: "plugdb", username: "postgres", password: "Vaydar123!");
 
 plug.use("users");
 

@@ -70,6 +70,7 @@ bundled in-memory `mock` adapter. Status of the language itself:
 | **MongoDB joins** (M6): inner joins compiled to `$lookup`/`$unwind`, null/missing key guards on both sides, one combined post-join WHERE, alias collision avoidance, projection/sort/limit, 30 unit tests plus a gated live test | ✅ done |
 | **MongoDB aggregates** (M7): COUNT/SUM/AVG/MIN/MAX compiled to one WHERE `$match` plus `$group`, SQL empty/null semantics, exact BSON result conversion with explicit overflow failures, 32 unit tests plus a gated live test | ✅ done |
 | **MongoDB plain reads** (M8): `MongoReadExecutor` resolves the schema, reuses shared WHERE validation and the M2 compiler, runs `find()` with filter/projection/sort/limit, short-circuits `limit(0)`, and materializes ordered rows with exact BSON conversion; 19 unit tests plus a gated live test | ✅ done |
+| **Windows distribution**: self-contained `jpackage` app image and MSI installer with a bundled runtime, custom icon, machine-wide PATH registration, and uninstall cleanup configured | ✅ done |
 | PlugDB; other backends | ⬜ next |
 
 Test suite: **453 tests, 0 failures** (JUnit 5). The 5 PostgreSQL
@@ -170,8 +171,15 @@ package` produces the runnable executable `target/plug.jar` with the
 PostgreSQL JDBC driver, MongoDB Java sync driver, and Logback SLF4J
 provider bundled (the JDBC and SLF4J service entries are preserved);
 logging defaults to warnings/errors on stderr, so driver INFO/DEBUG
-output does not clutter script output. jpackage commands for
-self-contained native distributions are documented in
+output does not clutter script output.
+
+Windows distribution is available as a self-contained app image
+(`dist/plug/plug.exe`) and an MSI (`dist-installer/Plug-1.0.msi`),
+both built with JDK 21 `jpackage` and a bundled runtime. The MSI
+installs under `C:\Program Files\Plug` and adds that directory to
+the machine-wide PATH through a customized WiX component; its
+template preserves a stable component GUID for upgrades and uninstall.
+Prerequisites, commands, outputs, and PATH behavior are documented in
 `plug-language/README.md` (the interactive REPL is explicitly deferred).
 
 ## Roadmap
